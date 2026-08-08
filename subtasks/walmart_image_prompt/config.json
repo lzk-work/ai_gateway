@@ -1,0 +1,23 @@
+﻿{
+    "name":  "walmart_image_prompt",
+    "description":  "Walmart 图片生成提示词业务任务。业务级执行配置放在这里，阶段配置只描述阶段自己的输入、输出、模型和校验规则。",
+    "input":  {
+                  "excel_path":  "E:/WorkSpace/ai_gateway/subtasks/walmart_image_prompt/input/walmart_flow_2.xlsx",
+                  "sheet_name":  "Sheet1"
+              },
+    "execution":  {
+                      "max_records":  5000,
+                      "preflight_model":  true,
+                      "concurrency":  10,
+                      "image_concurrency":  7,
+                      "oss_concurrency":  10,
+                      "oss_batch_size":  500
+                  },
+    "workflow":  {
+                     "generate_prompt_tasks":  true,
+                     "call_buzz_model":  true,
+                     "generate_and_download_images":  true,
+                     "upload_oss":  true,
+                     "build_final_result":  true
+                 }
+}

@@ -1,0 +1,51 @@
+﻿{
+    "name":  "walmart_get_pic_prompt",
+    "description":  "业务任务 walmart_image_prompt 的第一阶段：读取 Walmart Excel 行数据，并按提示词模板生成模型调用任务。",
+    "execution":  {
+                      "type":  "local_transform",
+                      "gateway":  null,
+                      "model":  null
+                  },
+    "input":  {
+                  "excel_path":  "E:/WorkSpace/ai_gateway/subtasks/walmart_image_prompt/input/walmart_flow_test.xlsx",
+                  "sheet_name":  "Sheet1",
+                  "prompt_template_path":  "E:/WorkSpace/ai_gateway/subtasks/walmart_image_prompt/prompts/walmart_image_prompt_template.txt"
+              },
+    "output":  {
+                   "prompt_tasks_path":  "E:/WorkSpace/ai_gateway/subtasks/walmart_image_prompt/stages/get_pic_prompt/output/generated_prompt_tasks.jsonl"
+               },
+    "batch_id":  "walmart_get_pic_prompt_test",
+    "columns":  {
+                    "task_id":  "SKU",
+                    "title":  "标题",
+                    "bullets":  "五点",
+                    "images":  [
+                                   "主图"
+                               ]
+                },
+    "context_policy":  {
+                           "scope":  "sku",
+                           "mode":  "stateless_local_transform",
+                           "cross_sku_history":  false,
+                           "within_sku_stage_context":  false,
+                           "chat_history_turns":  0,
+                           "use_structured_previous_outputs":  false
+                       },
+    "limits":  {
+                   "max_prompt_chars":  60000,
+                   "warn_prompt_chars":  40000,
+                   "max_images_per_task":  10,
+                   "allowed_image_types":  [
+                                               "jpg",
+                                               "jpeg",
+                                               "png",
+                                               "webp"
+                                           ],
+                   "image_detail":  "auto"
+               },
+    "placeholder_mapping":  {
+                                "产品标题":  "标题",
+                                "产品五点":  "五点"
+                            },
+    "include_row_metadata":  true
+}

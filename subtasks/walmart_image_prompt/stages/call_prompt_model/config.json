@@ -1,0 +1,68 @@
+﻿{
+    "name":  "walmart_call_prompt_model",
+    "description":  "业务任务 walmart_image_prompt 的第二阶段：读取第一阶段生成的任务，调用 BUZZ/OpenAI 兼容接口，校验 JSON，并写出 JSONL 与 Excel 结果。",
+    "execution":  {
+                      "type":  "model_call",
+                      "gateway":  {
+                                      "name":  "buzz",
+                                      "base_url":  "https://buzzai.cc",
+                                      "api_key_env":  "BUZZ_API_KEY",
+                                      "auth_header":  "Authorization",
+                                      "endpoint":  "/v1/chat/completions"
+                                  },
+                      "model":  {
+                                    "name":  "gpt-5.4",
+                                    "candidates":  [
+                                      "gpt-5.4-mini",
+                                      "gpt-5.6-terra",
+                                      "gpt-5.5"
+                                    ],
+                                    "refresh_on_error":  true,
+                                    "provider":  "openai",
+                                    "api_style":  "chat_completions",
+                                    "stream":  true,
+                                    "max_tokens":  12000,
+                                    "temperature":  0.2,
+                                    "image_detail":  "auto"
+                                }
+                  },
+    "input":  {
+                  "prompt_tasks_path":  "E:/WorkSpace/ai_gateway/subtasks/walmart_image_prompt/stages/get_pic_prompt/output/generated_prompt_tasks.jsonl",
+                  "source_excel_path":  "E:/WorkSpace/ai_gateway/subtasks/walmart_image_prompt/input/walmart_flow_test.xlsx"
+              },
+    "output":  {
+                   "model_results_path":  "E:/WorkSpace/ai_gateway/subtasks/walmart_image_prompt/stages/call_prompt_model/output/model_results.jsonl",
+                   "full_outputs_dir":  "E:/WorkSpace/ai_gateway/subtasks/walmart_image_prompt/stages/call_prompt_model/output/full_outputs",
+                   "excel_result_path":  "E:/WorkSpace/ai_gateway/subtasks/walmart_image_prompt/stages/call_prompt_model/output/walmart_results.xlsx"
+               },
+    "context_policy":  {
+                           "scope":  "sku",
+                           "mode":  "single_request",
+                           "cross_sku_history":  false,
+                           "within_sku_stage_context":  false,
+                           "chat_history_turns":  0,
+                           "use_structured_previous_outputs":  false
+                       },
+    "validation":  {
+                       "require_json_parseable":  true,
+                       "require_product_analysis":  true,
+                       "require_image_plan_count":  6,
+                       "preserve_raw_text":  true
+                   },
+    "retry":  {
+                  "max_retries":  2,
+                  "retry_delay_seconds":  30,
+                  "retryable_http_status":  [
+                                                429,
+                                                500,
+                                                502,
+                                                503,
+                                                504,
+                                                525
+                                            ]
+              },
+    "prompt_override":  null,
+    "resume":  {
+                   "skip_success":  true
+               }
+}

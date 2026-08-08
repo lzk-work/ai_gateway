@@ -1,0 +1,29 @@
+default_model: gpt-5.6-luna
+
+models:
+  gpt-5.6-luna:
+    gateway: buzz
+    provider: openai
+    api_style: chat_completions
+    cost_tier: cheapest
+    context_window: short
+    max_context_tokens: 272000
+    supports_text: true
+    supports_image_url: true
+    supports_image_base64: true
+    max_tokens_default: 4096
+    temperature_default: 0.2
+    image_detail: auto
+    context_policy:
+      mode: stateless
+      include_history: false
+      history_turns: 0
+    limits:
+      max_prompt_chars: 60000
+      warn_prompt_chars: 40000
+      max_images_per_task: null
+      allowed_image_types:
+        - jpg
+        - jpeg
+        - png
+        - webp

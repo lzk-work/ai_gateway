@@ -1,0 +1,52 @@
+﻿{
+    "name":  "generate_sub_images",
+    "description":  "读取成功 SKU 的副图入参模板，调用 MXAPI gpt-image-2 生成图片，轮询结果并下载图片。",
+    "execution":  {
+                      "type":  "image_generation",
+                      "gateway":  {
+                                      "name":  "mxapi",
+                                      "endpoint_submit":  "/api/v2/gpt-image-2",
+                                      "endpoint_query":  "/api/v2/gpt-image/task"
+                                  },
+                      "model":  {
+                                    "name":  "gpt-image-2",
+                                    "aspect_ratio":  "1:1",
+                                    "quality":  "low",
+                                    "resolution":  "1K"
+                                }
+                  },
+    "input":  {
+                  "excel_path":  "E:/WorkSpace/ai_gateway/subtasks/walmart_image_prompt/stages/build_sub_image_download_input/output/walmart_sub_image_input_result.xlsx",
+                  "sheet_name":  "Sheet1",
+                  "model_results_path":  "E:/WorkSpace/ai_gateway/subtasks/walmart_image_prompt/stages/call_prompt_model/output/model_results.jsonl"
+              },
+    "output":  {
+                   "excel_path":  "E:/WorkSpace/ai_gateway/subtasks/walmart_image_prompt/stages/generate_sub_images/output/walmart_sub_image_generation_result.xlsx",
+                   "results_path":  "E:/WorkSpace/ai_gateway/subtasks/walmart_image_prompt/stages/generate_sub_images/output/image_generation_results.jsonl",
+                   "download_dir":  "E:/WorkSpace/ai_gateway/subtasks/walmart_image_prompt/stages/generate_sub_images/output/downloaded_images",
+                   "raw_responses_dir":  "E:/WorkSpace/ai_gateway/subtasks/walmart_image_prompt/stages/generate_sub_images/output/raw_responses",
+                   "checkpoint_path":  "E:/WorkSpace/ai_gateway/subtasks/walmart_image_prompt/stages/generate_sub_images/output/image_generation_checkpoint.jsonl"
+               },
+    "columns":  {
+                    "sku":  "SKU",
+                    "reference_image":  "参考图片链接",
+                    "image_name":  "图片命名",
+                    "status":  "下载结果",
+                    "task_id":  "task_id"
+                },
+    "limits":  {
+                   "poll_interval_seconds":  5,
+                   "max_wait_seconds":  300,
+                   "submit_delay_seconds":  1.5,
+                   "download_timeout_seconds":  60
+               },
+    "retry":  {
+                  "max_submit_retries":  3,
+                  "max_download_retries":  2,
+                  "retry_delay_seconds":  5
+              },
+    "resume":  {
+                   "skip_success":  true,
+                   "poll_existing_task_id":  true
+               }
+}

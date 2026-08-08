@@ -1,0 +1,24 @@
+﻿{
+  "name": "build_sub_image_download_input",
+  "description": "根据已成功生成图片方案的 SKU，生成副图下载/上传入参模板。",
+  "input": {
+    "source_excel_path": "E:/WorkSpace/ai_gateway/subtasks/walmart_image_prompt/input/walmart_flow_test.xlsx",
+    "source_sheet_name": "Sheet1",
+    "model_results_path": "E:/WorkSpace/ai_gateway/subtasks/walmart_image_prompt/stages/call_prompt_model/output/model_results.jsonl",
+    "template_path": "E:/WorkSpace/ai_gateway/subtasks/walmart_image_prompt/templates/sub_image_download_template.xlsx",
+    "template_sheet_name": "Sheet1"
+  },
+  "output": {
+    "excel_path": "E:/WorkSpace/ai_gateway/subtasks/walmart_image_prompt/stages/build_sub_image_download_input/output/walmart_sub_image_input_result.xlsx"
+  },
+  "columns": {
+    "source_sku": "SKU",
+    "source_main_image": "主图",
+    "template_sku": "SKU",
+    "template_reference_image": "参考图片链接",
+    "template_image_name": "图片命名",
+    "template_download_result": "下载结果",
+    "template_task_id": "task_id"
+  },
+  "image_count": 6
+}

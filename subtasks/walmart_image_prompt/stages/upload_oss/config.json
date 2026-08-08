@@ -1,0 +1,37 @@
+{
+  "name": "upload_oss",
+  "description": "上传当前批次已下载图片到阿里云 OSS。",
+  "execution": {
+    "type": "oss_upload",
+    "provider": "aliyun_oss"
+  },
+  "input": {
+    "image_result_excel_path": "",
+    "sheet_name": "Sheet1",
+    "download_dir": ""
+  },
+  "output": {
+    "excel_path": "",
+    "results_path": "",
+    "checkpoint_path": ""
+  },
+  "oss": {
+    "prefix": "develop",
+    "key_template": "develop/{sku}/{image_name}.png",
+    "url_template": null,
+    "overwrite": true
+  },
+  "columns": {
+    "sku": "SKU",
+    "image_name": "图片命名",
+    "download_status": "下载结果",
+    "task_id": "task_id"
+  },
+  "limits": {
+    "max_workers": 10,
+    "batch_size": 500
+  },
+  "resume": {
+    "skip_success": true
+  }
+}
