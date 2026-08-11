@@ -242,7 +242,28 @@ def row_key(row: dict[str, Any]) -> str:
 
 
 def completed_keys(rows: list[dict[str, Any]]) -> set[str]:
-    return {f"{row.get('sku')}::{row.get('image_name')}" for row in rows if row.get("status") == "success"}
+    return {record_key(row) for row in rows if is_completed_success(row)}
+
+
+def is_completed_success(row: dict[str, Any]) -> bool:
+    if row.get("status") != "success":
+        return False
+    key = record_key(row)
+    if not key:
+        return False
+    downloaded_path = row.get("downloaded_path")
+    if not downloaded_path:
+        return False
+    path = Path(str(downloaded_path))
+    if not path.is_file():
+        return False
+    expected_size = row.get("file_size")
+    actual_size = path.stat().st_size
+    if actual_size <= 0:
+        return False
+    if isinstance(expected_size, int) and expected_size > 0 and actual_size != expected_size:
+        return False
+    return True
 
 
 def apply_checkpoint_to_rows(rows: list[dict[str, Any]], checkpoint_rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -561,7 +582,11 @@ def merge_records(existing_rows: list[dict[str, Any]], new_records: list[ImageGe
     for row in source_rows:
         key = row_key(row)
         if key in merged:
-            ordered.append(merged[key])
+            current = dict(merged[key])
+            current["row_number"] = row["row_number"]
+            current["reference_image"] = row.get("reference_image")
+            current["image_number"] = row.get("image_number")
+            ordered.append(current)
             seen.add(key)
     return ordered
 
@@ -588,9 +613,10 @@ def write_jsonl_rows(rows: list[dict[str, Any]], path: str | Path) -> None:
 
 
 def write_excel(workbook, sheet, headers: dict[str, int], rows: list[dict[str, Any]], config: MxapiGenerateImagesConfig) -> None:
+    row_numbers_by_key = current_sheet_row_numbers(sheet, headers, config)
     for row in rows:
-        row_number = row.get("row_number")
-        if not isinstance(row_number, int):
+        row_number = row_numbers_by_key.get(record_key(row))
+        if not row_number:
             continue
         sheet.cell(row_number, headers[config.columns["status"]], value="成功" if row.get("status") == "success" else "失败")
         sheet.cell(row_number, headers[config.columns["task_id"]], value=row.get("task_id"))
@@ -599,6 +625,19 @@ def write_excel(workbook, sheet, headers: dict[str, int], rows: list[dict[str, A
     workbook.save(output_path)
     print(f"图片结果日志: {config.output_results_path}")
     print(f"图片结果Excel: {config.output_excel_path}")
+
+
+def current_sheet_row_numbers(sheet, headers: dict[str, int], config: MxapiGenerateImagesConfig) -> dict[str, int]:
+    sku_col = headers[config.columns["sku"]]
+    image_name_col = headers[config.columns["image_name"]]
+    row_numbers: dict[str, int] = {}
+    for row_number in range(2, sheet.max_row + 1):
+        sku = cell_text(sheet, row_number, sku_col)
+        image_name = cell_text(sheet, row_number, image_name_col)
+        if not sku or not image_name:
+            continue
+        row_numbers.setdefault(f"{sku}::{image_name}", row_number)
+    return row_numbers
 
 
 def main() -> None:

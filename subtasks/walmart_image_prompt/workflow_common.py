@@ -134,6 +134,7 @@ def apply_batch_to_image_config(config):
 def apply_batch_to_oss_config(config, batch_name: str | None = None):
     paths = batch_paths(batch_name)
     config.input_excel_path = str(paths["image_excel"])
+    config.image_results_path = str(paths["image_results"])
     config.download_dir = str(paths["download_dir"])
     config.output_excel_path = str(paths["oss_excel"])
     config.output_results_path = str(paths["oss_results"])
@@ -201,14 +202,16 @@ def preflight_buzz_model(call_config) -> None:
 
 
 def build_current_prompt_task_preview_rows() -> list[dict[str, Any]]:
-    from ai_gateway.subtasks.walmart_get_pic_prompt import _is_empty_row, load_config, read_excel_rows
+    from ai_gateway.subtasks.walmart_get_pic_prompt import _is_empty_row, load_config, read_excel_rows, validate_required_columns
 
     config = apply_batch_to_prompt_config(load_config(GET_PROMPT_CONFIG))
     if not Path(config.input_excel).exists():
         return []
     batch_id = batch_name_from_input()
     rows = []
-    for row_number, row in read_excel_rows(config.input_excel, config.sheet_name):
+    validate_required_columns(config)
+    excel_rows = read_excel_rows(config.input_excel, config.sheet_name)
+    for row_number, row in excel_rows:
         if _is_empty_row(row):
             continue
         sku = str(row.get(config.task_id_column) or f"row-{row_number}").strip()

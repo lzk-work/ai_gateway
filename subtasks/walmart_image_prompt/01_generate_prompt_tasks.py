@@ -14,6 +14,7 @@ from ai_gateway.subtasks.walmart_get_pic_prompt import (
     precheck_task,
     read_excel_rows,
     run,
+    validate_required_columns,
 )
 
 
@@ -38,7 +39,9 @@ def preview(config) -> None:
         print(f"Excel 不存在: {config.input_excel}")
         print("请确认 stages/get_pic_prompt/config.json 中的 input.excel_path 是否指向当前批次入参文件。")
         return
-    rows = [(row_number, row) for row_number, row in read_excel_rows(config.input_excel, config.sheet_name) if not _is_empty_row(row)]
+    validate_required_columns(config)
+    all_rows = read_excel_rows(config.input_excel, config.sheet_name)
+    rows = [(row_number, row) for row_number, row in all_rows if not _is_empty_row(row)]
     template = Path(config.prompt_template_path).read_text(encoding="utf-8-sig")
     passed = 0
     failed = 0

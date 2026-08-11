@@ -39,6 +39,7 @@ class OpenAIChatClient:
             timeout=self.gateway.timeout_seconds,
         )
         latency_ms = int((time.perf_counter() - started) * 1000)
+        response.encoding = "utf-8"
         if response.status_code >= 400:
             raise RuntimeError(f"HTTP {response.status_code}: {response.text[:1000]}")
         return response.json(), latency_ms

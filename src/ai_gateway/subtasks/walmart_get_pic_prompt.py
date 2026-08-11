@@ -88,6 +88,7 @@ def load_config(path: str | Path) -> WalmartPromptConfig:
 
 
 def run(config: WalmartPromptConfig) -> list[WalmartPromptRecord]:
+    validate_required_columns(config)
     rows = read_excel_rows(config.input_excel, config.sheet_name)
     template = Path(config.prompt_template_path).read_text(encoding="utf-8-sig")
     placeholders = list_placeholders(template)
@@ -162,6 +163,29 @@ def run(config: WalmartPromptConfig) -> list[WalmartPromptRecord]:
     return records
 
 
+def validate_required_columns(config: WalmartPromptConfig) -> None:
+    required = required_columns(config)
+    available = set(read_excel_headers(config.input_excel, config.sheet_name))
+    missing = [column for column in required if column not in available]
+    if missing:
+        raise RuntimeError(
+            "Excel 缺少必需列: "
+            + ", ".join(missing)
+            + f"。请检查文件 {config.input_excel} 的第一行表头。"
+        )
+
+
+def required_columns(config: WalmartPromptConfig) -> list[str]:
+    columns = [
+        config.task_id_column,
+        config.title_column,
+        config.bullet_column,
+        *config.image_columns,
+        *config.placeholder_mapping.values(),
+    ]
+    return list(dict.fromkeys(column for column in columns if column))
+
+
 def read_excel_rows(
     path: str | Path,
     sheet_name: str | None = None,
@@ -172,23 +196,45 @@ def read_excel_rows(
         raise RuntimeError("Install openpyxl to read Excel files.") from exc
 
     workbook = load_workbook(path, read_only=True, data_only=True)
-    sheet = workbook[sheet_name] if sheet_name else workbook.active
-    row_iter = sheet.iter_rows(values_only=True)
     try:
-        header_values = next(row_iter)
-    except StopIteration:
-        return []
+        sheet = workbook[sheet_name] if sheet_name else workbook.active
+        row_iter = sheet.iter_rows(values_only=True)
+        try:
+            header_values = next(row_iter)
+        except StopIteration:
+            return []
 
-    headers = [str(value).strip() if value is not None else "" for value in header_values]
-    rows: list[tuple[int, dict[str, Any]]] = []
-    for row_number, values in enumerate(row_iter, start=2):
-        row = {
-            headers[index]: value
-            for index, value in enumerate(values)
-            if index < len(headers) and headers[index]
-        }
-        rows.append((row_number, row))
-    return rows
+        headers = [str(value).strip() if value is not None else "" for value in header_values]
+        rows: list[tuple[int, dict[str, Any]]] = []
+        for row_number, values in enumerate(row_iter, start=2):
+            row = {
+                headers[index]: value
+                for index, value in enumerate(values)
+                if index < len(headers) and headers[index]
+            }
+            rows.append((row_number, row))
+        return rows
+    finally:
+        workbook.close()
+
+
+def read_excel_headers(path: str | Path, sheet_name: str | None = None) -> list[str]:
+    try:
+        from openpyxl import load_workbook  # type: ignore
+    except ImportError as exc:
+        raise RuntimeError("Install openpyxl to read Excel files.") from exc
+
+    workbook = load_workbook(path, read_only=True, data_only=True)
+    try:
+        sheet = workbook[sheet_name] if sheet_name else workbook.active
+        row_iter = sheet.iter_rows(values_only=True)
+        try:
+            header_values = next(row_iter)
+        except StopIteration:
+            return []
+        return [str(value).strip() for value in header_values if value is not None and str(value).strip()]
+    finally:
+        workbook.close()
 
 
 def precheck_task(

@@ -6,12 +6,12 @@ gateways:
     base_url: https://buzzai.cc
     api_key_env: BUZZ_API_KEY
     auth_header: Authorization
-    timeout_seconds: 600
+    timeout_seconds: 300
     max_retries: 3
   mxapi:
     type: mxapi
     base_url: https://open.mxapi.org
     api_key_env: MXAPI_API_KEY
     auth_header: Authorization
-    timeout_seconds: 120
+    timeout_seconds: 300
     max_retries: 3

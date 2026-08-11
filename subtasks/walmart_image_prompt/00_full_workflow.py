@@ -12,6 +12,7 @@ import sys
 from pathlib import Path
 
 from workflow_common import workflow_switches
+from scripts.execution_confirmation import print_execution_confirmation
 from scripts.statistics.batch_stats import print_batch_stats
 
 TASK_ROOT = Path(__file__).resolve().parent
@@ -37,16 +38,8 @@ def main() -> None:
 
     switches = workflow_switches()
     print("\n=== Walmart 图片业务总流程 ===")
-    if args.dry_run:
-        print("运行模式: 试运行，只预览，不调用接口，不写输出")
-    print(
-        "阶段开关: "
-        f"01={switches['generate_prompt_tasks']} | "
-        f"02={switches['call_buzz_model']} | "
-        f"03={switches['generate_and_download_images']} | "
-        f"05={switches['upload_oss']} | "
-        f"06={switches['build_final_result']}"
-    )
+    if not print_execution_confirmation(args.dry_run):
+        return
 
     if switches["generate_prompt_tasks"]:
         run_step("01_generate_prompt_tasks.py", args.dry_run)

@@ -41,6 +41,7 @@ class OssUploadConfig:
     concurrency: int = 5
     batch_size: int = 500
     skip_success: bool = True
+    image_results_path: str | None = None
 
 
 @dataclass(slots=True)
@@ -109,6 +110,7 @@ def load_config(path: str | Path) -> OssUploadConfig:
         output_excel_path=data["output"]["excel_path"],
         output_results_path=data["output"]["results_path"],
         checkpoint_path=data["output"]["checkpoint_path"],
+        image_results_path=data["input"].get("image_results_path"),
         columns=data["columns"],
         oss_prefix=oss.get("prefix", "walmart").strip("/"),
         key_template=oss.get("key_template", "walmart/{sku}/{image_name}.png"),
@@ -193,6 +195,10 @@ def load_work_rows(config: OssUploadConfig):
     if missing:
         raise RuntimeError("Missing OSS upload input headers: " + ", ".join(missing))
 
+    if config.image_results_path and Path(config.image_results_path).exists():
+        rows = load_work_rows_from_image_results(config, sheet, headers)
+        return rows, workbook, sheet, headers
+
     rows: list[dict[str, Any]] = []
     seen_keys: set[str] = set()
     for row_number in range(2, sheet.max_row + 1):
@@ -221,6 +227,39 @@ def load_work_rows(config: OssUploadConfig):
             }
         )
     return rows, workbook, sheet, headers
+
+
+def load_work_rows_from_image_results(config: OssUploadConfig, sheet, headers: dict[str, int]) -> list[dict[str, Any]]:
+    image_rows = read_jsonl_if_exists(config.image_results_path or "")
+    rows: list[dict[str, Any]] = []
+    seen_keys: set[str] = set()
+    for row in image_rows:
+        if row.get("status") != "success":
+            continue
+        sku = str(row.get("sku") or "").strip()
+        image_name = str(row.get("image_name") or "").strip()
+        if not sku or not image_name:
+            continue
+        unique_key = f"{sku}::{image_name}"
+        if unique_key in seen_keys:
+            continue
+        seen_keys.add(unique_key)
+        local_path = row.get("downloaded_path") or str(Path(config.download_dir) / image_file_name(image_name))
+        oss_key = render_template(config.key_template, sku=sku, image_name=Path(image_file_name(image_name)).stem)
+        row_number = row.get("row_number")
+        rows.append(
+            {
+                "row_number": row_number if isinstance(row_number, int) else 0,
+                "sku": sku,
+                "image_name": image_name,
+                "local_path": str(local_path),
+                "oss_key": oss_key,
+            }
+        )
+    row_numbers = current_sheet_row_numbers(sheet, headers, config)
+    for row in rows:
+        row["row_number"] = row_numbers.get(row_key(row), row.get("row_number") or 0)
+    return rows
 
 
 def process_rows(
@@ -313,7 +352,11 @@ def merge_records(existing_rows: list[dict[str, Any]], new_records: list[OssUplo
     for row in source_rows:
         key = row_key(row)
         if key in merged:
-            ordered.append(merged[key])
+            current = dict(merged[key])
+            current["row_number"] = row["row_number"]
+            current["local_path"] = row["local_path"]
+            current["oss_key"] = row["oss_key"]
+            ordered.append(current)
             seen.add(key)
     return ordered
 
@@ -325,9 +368,11 @@ def write_excel(workbook, sheet, headers: dict[str, int], rows: list[dict[str, A
             headers[column_name] = sheet.max_column + 1
             sheet.cell(row=1, column=headers[column_name], value=column_name)
 
+    row_numbers_by_key = current_sheet_row_numbers(sheet, headers, config)
     for row in rows:
-        row_number = row.get("row_number")
-        if not isinstance(row_number, int):
+        key = record_key(row)
+        row_number = row_numbers_by_key.get(key)
+        if not row_number:
             continue
         sheet.cell(row_number, headers["OSS上传状态"], value=display_status(str(row.get("status") or "")))
         sheet.cell(row_number, headers["OSS上传URL"], value=row.get("oss_url"))
@@ -339,6 +384,20 @@ def write_excel(workbook, sheet, headers: dict[str, int], rows: list[dict[str, A
     workbook.save(output_path)
     print(f"OSS结果日志: {config.output_results_path}")
     print(f"OSS结果Excel: {config.output_excel_path}")
+
+
+def current_sheet_row_numbers(sheet, headers: dict[str, int], config: OssUploadConfig) -> dict[str, int]:
+    sku_col = headers[config.columns["sku"]]
+    image_name_col = headers[config.columns["image_name"]]
+    row_numbers: dict[str, int] = {}
+    for row_number in range(2, sheet.max_row + 1):
+        sku = cell_text(sheet, row_number, sku_col)
+        image_name = cell_text(sheet, row_number, image_name_col)
+        if not sku or not image_name:
+            continue
+        key = f"{sku}::{image_name}"
+        row_numbers.setdefault(key, row_number)
+    return row_numbers
 
 
 def header_map(sheet) -> dict[str, int]:

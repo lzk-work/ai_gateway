@@ -12,6 +12,7 @@ from openpyxl import load_workbook
 from workflow_common import batch_name_from_input, batch_paths
 
 from ai_gateway.subtasks.walmart_call_prompt_model import inspect_result_text
+from ai_gateway.subtasks.mxapi_generate_images import is_completed_success
 from final_image_result import preview_final_image_result_from_logs
 
 
@@ -65,8 +66,6 @@ def image_row_key(row: dict[str, str]) -> str:
 
 
 def model_success_is_valid(row: dict[str, Any]) -> tuple[bool, str | None]:
-    if row.get("status") != "success" or row.get("validation_status") != "passed":
-        return False, row.get("error_message") or row.get("status")
     full_output_path = row.get("full_output_path")
     if full_output_path:
         path = Path(full_output_path)
@@ -75,6 +74,9 @@ def model_success_is_valid(row: dict[str, Any]) -> tuple[bool, str | None]:
         _, _, validation_error = inspect_result_text(path.read_text(encoding="utf-8", errors="replace"))
         if validation_error:
             return False, validation_error
+        return True, None
+    if row.get("status") != "success" or row.get("validation_status") != "passed":
+        return False, row.get("error_message") or row.get("status")
     return True, None
 
 
@@ -127,17 +129,20 @@ def collect_stats(batch_name: str | None = None) -> dict[str, Any]:
         if row_key(row) in expected_image_keys
     }
     image_status_counts = Counter(str(row.get("status") or "unknown") for row in image_by_key.values())
-    image_done_keys = {key for key, row in image_by_key.items() if row.get("status") in {"success", "failed", "missing_file"}}
-    image_pending = len(expected_image_keys - image_done_keys)
+    image_success_keys = {key for key, row in image_by_key.items() if is_completed_success(row)}
+    image_success_missing_local = [
+        key
+        for key, row in image_by_key.items()
+        if row.get("status") == "success" and not is_completed_success(row)
+    ]
+    image_pending = len(expected_image_keys - image_success_keys)
 
     upload_by_key = {
         row_key(row): row
         for row in upload_rows
-        if row_key(row) in image_by_key and image_by_key[row_key(row)].get("status") == "success"
+        if row_key(row) in image_success_keys
     }
-    upload_expected_keys = {
-        key for key, row in image_by_key.items() if row.get("status") == "success"
-    }
+    upload_expected_keys = image_success_keys
     upload_status_counts = Counter(str(row.get("status") or "unknown") for row in upload_by_key.values())
     upload_done_keys = {key for key, row in upload_by_key.items() if row.get("status") in {"success", "skipped", "failed", "missing_file"}}
     upload_pending = len(upload_expected_keys - upload_done_keys)
@@ -166,6 +171,9 @@ def collect_stats(batch_name: str | None = None) -> dict[str, Any]:
         "image_input_missing_count": len(expected_image_keys - all_image_input_keys),
         "image_tracked_count": len(image_by_key),
         "image_status_counts": dict(image_status_counts),
+        "image_real_success_count": len(image_success_keys),
+        "image_success_missing_local_count": len(image_success_missing_local),
+        "image_success_missing_local_examples": image_success_missing_local[:10],
         "image_pending_count": image_pending,
         "upload_expected_count": len(upload_expected_keys),
         "upload_tracked_count": len(upload_by_key),
@@ -203,11 +211,18 @@ def print_batch_stats(batch_name: str | None = None) -> None:
     )
     print(
         "03生成下载: "
-        f"成功={image_counts.get('success', 0)} | "
+        f"成功={stats['image_real_success_count']} | "
         f"已提交={image_counts.get('submitted', 0)} | "
         f"失败={image_counts.get('failed', 0)} | "
-        f"待处理={stats['image_pending_count']}"
+        f"待处理/重试={stats['image_pending_count']}"
     )
+    if stats["image_success_missing_local_count"]:
+        print(
+            "03成功日志但本地文件缺失: "
+            f"{stats['image_success_missing_local_count']} | 会在重跑03时重新下载/重试"
+        )
+        for key in stats["image_success_missing_local_examples"][:5]:
+            print(f"  {key}")
     print(
         "05上传OSS: "
         f"应上传={stats['upload_expected_count']} | "

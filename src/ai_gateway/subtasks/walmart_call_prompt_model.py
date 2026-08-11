@@ -172,6 +172,7 @@ def fetch_gateway_models(gateway_config) -> list[str]:
     else:
         headers[header_name] = api_key
     response = requests.get(url, headers=headers, timeout=60)
+    response.encoding = "utf-8"
     if response.status_code >= 400:
         raise RuntimeError(f"HTTP {response.status_code}: {response.text[:1000]}")
     payload = response.json()
@@ -398,19 +399,20 @@ def completed_sku_ids(rows: list[dict[str, Any]]) -> set[str]:
 
 
 def is_completed_row(row: dict[str, Any]) -> bool:
+    full_output_path = row.get("full_output_path")
+    if full_output_path:
+        path = Path(full_output_path)
+        if path.exists():
+            _, _, validation_error = inspect_result_text(path.read_text(encoding="utf-8", errors="replace"))
+            if validation_error is None:
+                return True
+            return False
     if row.get("status") != "success":
         return False
     if row.get("validation_status") != "passed" and not (
         row.get("json_parseable") is True and row.get("image_plan_count") == 6
     ):
         return False
-    full_output_path = row.get("full_output_path")
-    if full_output_path:
-        path = Path(full_output_path)
-        if not path.exists():
-            return False
-        _, _, validation_error = inspect_result_text(path.read_text(encoding="utf-8", errors="replace"))
-        return validation_error is None
     return True
 
 
@@ -746,6 +748,7 @@ def stream_chat_completions(
         timeout=client.gateway.timeout_seconds,
     ) as response:
         latency_ms = int((time.perf_counter() - started) * 1000)
+        response.encoding = "utf-8"
         if response.status_code >= 400:
             raise RuntimeError(f"HTTP {response.status_code}: {response.text[:1000]}")
         for raw_line in response.iter_lines(decode_unicode=True):
@@ -828,7 +831,7 @@ def mojibake_reason(text: str) -> str | None:
     if "\ufffd" in text or "锟斤拷" in text:
         return "疑似乱码: replacement characters"
     c1_controls = sum(1 for char in text if 0x80 <= ord(char) <= 0x9F)
-    if c1_controls:
+    if c1_controls >= 10 or (c1_controls >= 5 and c1_controls / len(text) >= 0.01):
         return "疑似乱码: C1 control characters"
     if len(text) < 20:
         return None

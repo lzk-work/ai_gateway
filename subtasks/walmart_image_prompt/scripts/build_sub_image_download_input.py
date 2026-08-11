@@ -39,10 +39,6 @@ def successful_skus(results_path: str | Path) -> set[str]:
     from ai_gateway.subtasks.walmart_call_prompt_model import inspect_result_text
 
     for row in read_jsonl(results_path):
-        if row.get("status") != "success":
-            continue
-        if row.get("validation_status") != "passed":
-            continue
         full_output_path = row.get("full_output_path")
         if full_output_path:
             text_path = Path(full_output_path)
@@ -51,6 +47,8 @@ def successful_skus(results_path: str | Path) -> set[str]:
             _, _, validation_error = inspect_result_text(text_path.read_text(encoding="utf-8", errors="replace"))
             if validation_error:
                 continue
+        elif row.get("status") != "success" or row.get("validation_status") != "passed":
+            continue
         sku = row.get("sku")
         if sku:
             skus.add(str(sku).strip())
