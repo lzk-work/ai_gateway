@@ -20,6 +20,12 @@ from ai_gateway.validators.result_validator import extract_json
 
 
 PRINT_LOCK = threading.Lock()
+EXCEL_FORBIDDEN_CODEPOINTS = {
+    *range(0x00, 0x09),
+    0x0B,
+    0x0C,
+    *range(0x0E, 0x20),
+}
 
 
 @dataclass(slots=True)
@@ -907,9 +913,15 @@ def write_excel_results(
             "ai_processed_at": record.created_at,
         }
         for column_name, value in values.items():
-            sheet.cell(row=row_number, column=headers[column_name], value=value)
+            sheet.cell(row=row_number, column=headers[column_name], value=sanitize_excel_value(value))
 
     workbook.save(output_path)
+
+
+def sanitize_excel_value(value: Any) -> Any:
+    if not isinstance(value, str):
+        return value
+    return "".join(char for char in value if ord(char) not in EXCEL_FORBIDDEN_CODEPOINTS)
 
 
 
