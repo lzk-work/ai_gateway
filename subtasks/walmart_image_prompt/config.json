@@ -2,7 +2,7 @@
     "name":  "walmart_image_prompt",
     "description":  "Walmart 图片生成提示词业务任务。业务级执行配置放在这里，阶段配置只描述阶段自己的输入、输出、模型和校验规则。",
     "input":  {
-                  "excel_path":  "E:/WorkSpace/ai_gateway/subtasks/walmart_image_prompt/input/walmart_flow_3.xlsx",
+                  "excel_path":  "E:/WorkSpace/ai_gateway/subtasks/walmart_image_prompt/input/walmart_flow_4-1.xlsx",
                   "sheet_name":  "Sheet1"
               },
     "execution":  {
