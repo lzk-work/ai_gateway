@@ -123,13 +123,24 @@ def run(config: dict[str, Any]) -> None:
     style_row = 2
     output_row = 2
     generated_skus: list[str] = []
+    empty_sku_streak = 0
+    stop_after_empty_sku_rows = int(config.get("stop_after_empty_sku_rows", 200))
 
     for row_idx in range(2, source_ws.max_row + 1):
         raw_sku = source_ws.cell(row_idx, sku_col).value
         if raw_sku is None:
+            empty_sku_streak += 1
+            if empty_sku_streak >= stop_after_empty_sku_rows:
+                break
             continue
         sku = str(raw_sku).strip()
-        if not sku or sku not in success_skus:
+        if not sku:
+            empty_sku_streak += 1
+            if empty_sku_streak >= stop_after_empty_sku_rows:
+                break
+            continue
+        empty_sku_streak = 0
+        if sku not in success_skus:
             continue
         main_image = source_ws.cell(row_idx, main_image_col).value
         main_image = "" if main_image is None else str(main_image).strip()

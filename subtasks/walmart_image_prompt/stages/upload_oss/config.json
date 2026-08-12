@@ -16,8 +16,8 @@
     "checkpoint_path": ""
   },
   "oss": {
-    "prefix": "walmart",
-    "key_template": "walmart/{sku}/{image_name}.png",
+    "prefix": "develop",
+    "key_template": "develop/{sku}/{image_name}.png",
     "url_template": null,
     "overwrite": true
   },
