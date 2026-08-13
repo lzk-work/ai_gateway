@@ -171,11 +171,14 @@ def run(config: MxapiGenerateImagesConfig) -> list[ImageGenerationRecord]:
     completed = completed_keys(existing_records) if config.skip_success else set()
     pending_rows = [row for row in rows if row_key(row) not in completed]
     if config.max_records and config.max_records > 0:
-        pending_rows = pending_rows[: config.max_records]
+        pending_rows = limit_rows_by_sku(pending_rows, config.max_records)
 
     print("\n=== MXAPI 图片生成阶段 ===", flush=True)
     print(
-        f"图片任务总数: {len(rows)} | 已成功跳过: {len(rows) - len(pending_rows)} | 本次待处理: {len(pending_rows)}",
+        f"图片任务总数: {len(rows)} 行 / {count_skus(rows)} 个 SKU | "
+        f"已成功跳过: {len(rows) - len(pending_rows)} 行 | "
+        f"本次待处理: {len(pending_rows)} 行 / {count_skus(pending_rows)} 个 SKU "
+        f"(max_records={config.max_records} 个 SKU)",
         flush=True,
     )
     records = process_rows(pending_rows, prompt_map, config, client, checkpoint_store)
@@ -239,6 +242,32 @@ def cell_text(sheet, row: int, column: int) -> str:
 
 def row_key(row: dict[str, Any]) -> str:
     return f"{row['sku']}::{row['image_name']}"
+
+
+def count_skus(rows: list[dict[str, Any]]) -> int:
+    return len({str(row.get("sku") or "").strip() for row in rows if str(row.get("sku") or "").strip()})
+
+
+def limit_rows_by_sku(rows: list[dict[str, Any]], max_records: int | None) -> list[dict[str, Any]]:
+    """按 SKU 为单位截断：最多保留前 max_records 个 SKU 的全部行。
+
+    max_records 语义为“源数据行数（SKU 数）”，每个 SKU 展开的图片行作为一个整体，
+    要么全部保留、要么全部截断，避免同一 SKU 只生成部分副图。
+    """
+    if not max_records or max_records <= 0:
+        return rows
+    seen: set[str] = set()
+    selected: list[dict[str, Any]] = []
+    for row in rows:
+        sku = str(row.get("sku") or "").strip()
+        if not sku:
+            continue
+        if sku not in seen:
+            if len(seen) >= max_records:
+                continue
+            seen.add(sku)
+        selected.append(row)
+    return selected
 
 
 def completed_keys(rows: list[dict[str, Any]]) -> set[str]:

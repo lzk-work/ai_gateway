@@ -17,6 +17,8 @@ from ai_gateway.subtasks.mxapi_generate_images import (
     CheckpointStore,
     apply_checkpoint_to_rows,
     completed_keys,
+    count_skus,
+    limit_rows_by_sku,
     load_config,
     load_work_rows,
     row_key,
@@ -70,11 +72,17 @@ def preview() -> None:
     rows = apply_checkpoint_to_rows(rows, checkpoint_rows)
     completed = completed_keys(checkpoint_rows) if config.skip_success else set()
     pending = [row for row in rows if row_key(row) not in completed]
-    selected = pending[: config.max_records] if config.max_records and config.max_records > 0 else pending
+    selected = limit_rows_by_sku(pending, config.max_records)
 
     print(f"图片入参: {input_path}")
     print(f"checkpoint: {config.checkpoint_path}")
-    print(f"图片任务总数: {len(rows)} | 已成功跳过: {len(completed)} | 未成功/待处理: {len(pending)} | 本次将处理: {len(selected)}")
+    print(
+        f"图片任务总数: {len(rows)} 行 / {count_skus(rows)} 个 SKU | "
+        f"已成功跳过: {len(completed)} 行 | "
+        f"未成功/待处理: {len(pending)} 行 / {count_skus(pending)} 个 SKU | "
+        f"本次将处理: {len(selected)} 行 / {count_skus(selected)} 个 SKU "
+        f"(max_records={config.max_records} 个 SKU)"
+    )
     print(f"网关: {config.gateway} | 模型: {config.model} | 并发: {config.concurrency} | max_records: {config.max_records}")
     print(f"下载目录: {config.download_dir}")
     if selected:

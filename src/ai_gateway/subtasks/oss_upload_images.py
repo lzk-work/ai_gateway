@@ -129,11 +129,14 @@ def run(config: OssUploadConfig) -> list[OssUploadRecord]:
     completed = completed_keys(existing) if config.skip_success else set()
     pending = [row for row in rows if row_key(row) not in completed]
     if config.max_records and config.max_records > 0:
-        pending = pending[: config.max_records]
+        pending = limit_rows_by_sku(pending, config.max_records)
 
     print("\n=== 05 上传 OSS ===", flush=True)
     print(
-        f"图片总数: {len(rows)} | 已成功跳过: {len(rows) - len(pending)} | 本次待上传: {len(pending)}",
+        f"图片总数: {len(rows)} 行 / {count_skus(rows)} 个 SKU | "
+        f"已成功跳过: {len(rows) - len(pending)} 行 | "
+        f"本次待上传: {len(pending)} 行 / {count_skus(pending)} 个 SKU "
+        f"(max_records={config.max_records} 个 SKU)",
         flush=True,
     )
     client = AliyunOssClient(load_aliyun_oss_config(config.project_root))
@@ -155,10 +158,7 @@ def preview(config: OssUploadConfig) -> None:
     existing = read_jsonl_if_exists(config.checkpoint_path)
     completed = completed_keys(existing) if config.skip_success else set()
     pending = [row for row in rows if row_key(row) not in completed]
-    if config.max_records and config.max_records > 0:
-        selected = pending[: config.max_records]
-    else:
-        selected = pending
+    selected = limit_rows_by_sku(pending, config.max_records)
 
     env_values = load_local_env(Path(config.project_root) / "configs" / "local.env")
     bucket = os.environ.get("ALIYUN_OSS_BUCKET") or env_values.get("ALIYUN_OSS_BUCKET") or "<bucket>"
@@ -170,7 +170,12 @@ def preview(config: OssUploadConfig) -> None:
     print(f"输入Excel: {config.input_excel_path}")
     print(f"图片目录: {config.download_dir}")
     print(f"checkpoint: {config.checkpoint_path}")
-    print(f"图片总数: {len(rows)} | 已成功跳过: {len(rows) - len(pending)} | 本次将上传: {len(selected)}")
+    print(
+        f"图片总数: {len(rows)} 行 / {count_skus(rows)} 个 SKU | "
+        f"已成功跳过: {len(rows) - len(pending)} 行 | "
+        f"本次将上传: {len(selected)} 行 / {count_skus(selected)} 个 SKU "
+        f"(max_records={config.max_records} 个 SKU)"
+    )
     print(f"并发: {config.concurrency} | batch_size: {config.batch_size} | overwrite: {config.overwrite}")
     if selected:
         print("样例:")
@@ -427,6 +432,32 @@ def render_template(template: str, **values: str) -> str:
 
 def row_key(row: dict[str, Any]) -> str:
     return f"{row['sku']}::{row['image_name']}"
+
+
+def count_skus(rows: list[dict[str, Any]]) -> int:
+    return len({str(row.get("sku") or "").strip() for row in rows if str(row.get("sku") or "").strip()})
+
+
+def limit_rows_by_sku(rows: list[dict[str, Any]], max_records: int | None) -> list[dict[str, Any]]:
+    """按 SKU 为单位截断：最多保留前 max_records 个 SKU 的全部行。
+
+    max_records 语义为“源数据行数（SKU 数）”，每个 SKU 展开的图片行作为一个整体，
+    要么全部保留、要么全部截断，避免同一 SKU 只上传部分图片。
+    """
+    if not max_records or max_records <= 0:
+        return rows
+    seen: set[str] = set()
+    selected: list[dict[str, Any]] = []
+    for row in rows:
+        sku = str(row.get("sku") or "").strip()
+        if not sku:
+            continue
+        if sku not in seen:
+            if len(seen) >= max_records:
+                continue
+            seen.add(sku)
+        selected.append(row)
+    return selected
 
 
 def record_key(row: dict[str, Any]) -> str:
