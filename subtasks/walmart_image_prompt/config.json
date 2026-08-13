@@ -14,8 +14,7 @@
                       "preflight_model":  true,
                       "concurrency":  10,
                       "image_concurrency":  10,
-                      "oss_concurrency":  15,
-                      "oss_batch_size":  500
+                      "oss_concurrency":  15
                   },
     "workflow":  {
                      "generate_prompt_tasks":  true,
