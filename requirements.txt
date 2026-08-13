@@ -1,0 +1,10 @@
+# AI Gateway 运行依赖
+# 部署新环境时一条命令安装全部依赖：
+#   pip install -r requirements.txt
+#
+# 版本下限与 pyproject.toml 中的 optional-dependencies 保持一致
+
+requests>=2.31.0          # BUZZ / MXAPI 中转站 HTTP 调用
+openpyxl>=3.1.0           # Excel 入参/结果读写
+PyYAML>=6.0               # YAML 配置加载（configs/*.yaml）
+oss2>=2.18.0              # 阿里云 OSS 图片上传
