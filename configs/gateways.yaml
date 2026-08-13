@@ -13,5 +13,5 @@ gateways:
     base_url: https://open.mxapi.org
     api_key_env: MXAPI_API_KEY
     auth_header: Authorization
-    timeout_seconds: 300
+    timeout_seconds: 600
     max_retries: 3

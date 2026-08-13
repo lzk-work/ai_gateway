@@ -417,16 +417,30 @@ def process_one(
     task_id = (row.get("task_id") or None) if config.poll_existing_task_id else None
     submit_latency_ms = None
     try:
-        if not task_id:
+        if task_id:
+            # 断点续跑：先用原 task_id 轮询，任务已完成则直接复用（覆盖超时/抖动恢复）
+            try:
+                poll_result, poll_count, wait_seconds = poll_until_done(client, task_id, config)
+            except TaskFailedError as exc:
+                # 原任务确认彻底失败（status=failed）→ 丢弃旧 task_id，重新提交生成
+                print(
+                    f"[{index}/{total}] 旧任务失败，重新生成 | SKU={sku} | 旧task_id={task_id} | 原因={short_error(str(exc))}",
+                    flush=True,
+                )
+                task_id, submit_latency_ms = submit_with_retry(client, prompt, row["reference_image"], config)
+                checkpoint_store.upsert(build_submitted_record(row, task_id, submit_latency_ms))
+                print(f"[{index}/{total}] 已提交 | SKU={sku} | task_id={task_id}", flush=True)
+                poll_result, poll_count, wait_seconds = poll_until_done(client, task_id, config)
+        else:
             task_id, submit_latency_ms = submit_with_retry(client, prompt, row["reference_image"], config)
             checkpoint_store.upsert(build_submitted_record(row, task_id, submit_latency_ms))
             print(f"[{index}/{total}] 已提交 | SKU={sku} | task_id={task_id}", flush=True)
-        poll_result, poll_count, wait_seconds = poll_until_done(client, task_id, config)
-        image_url = first_image_url(poll_result)
-        if not image_url:
+            poll_result, poll_count, wait_seconds = poll_until_done(client, task_id, config)
+        image_urls = collect_image_urls(poll_result)
+        if not image_urls:
             raise RuntimeError("结果中无图片URL")
         download_path = Path(config.download_dir) / f"{image_name}.png"
-        file_size = download_with_retry(client, image_url, download_path, config)
+        file_size, used_url = download_with_retry(client, image_urls, download_path, config)
         save_raw_response(config, image_name, poll_result)
         record = ImageGenerationRecord(
             row_number=row["row_number"],
@@ -436,7 +450,7 @@ def process_one(
             status="success",
             task_id=task_id,
             reference_image=row.get("reference_image"),
-            generated_image_url=image_url,
+            generated_image_url=used_url,
             downloaded_path=str(download_path),
             file_size=file_size,
             error_message=None,
@@ -484,6 +498,10 @@ def submit_with_retry(client: MxapiImageClient, prompt: str, reference_image: st
     raise RuntimeError(f"submit failed: {last_error}")
 
 
+class TaskFailedError(RuntimeError):
+    """MXAPI 任务确认失败（data.status == 'failed'），区别于超时/网络异常。"""
+
+
 def poll_until_done(client: MxapiImageClient, task_id: str, config: MxapiGenerateImagesConfig) -> tuple[dict[str, Any], int, int]:
     started = time.time()
     poll_count = 0
@@ -500,11 +518,14 @@ def poll_until_done(client: MxapiImageClient, task_id: str, config: MxapiGenerat
         if status == "completed":
             return payload, poll_count, int(time.time() - started)
         if status == "failed":
-            raise RuntimeError(str(data.get("error") or "task failed"))
+            # 真实错误在 error_msg 字段（部分服务返回 error），一并兼容读取
+            error_msg = str(data.get("error_msg") or data.get("error") or "task failed")
+            raise TaskFailedError(error_msg)
     raise RuntimeError(f"poll timeout after {config.max_wait_seconds}s: {last_payload}")
 
 
-def first_image_url(payload: dict[str, Any]) -> str | None:
+def collect_image_urls(payload: dict[str, Any]) -> list[str]:
+    """从 MXAPI 返回中提取所有图片地址（source_images / proxy_images / images），去重保序。"""
     result = ((payload.get("data") or {}).get("result") or {})
     urls: list[str] = []
     for key in ("source_images", "proxy_images", "images"):
@@ -512,11 +533,12 @@ def first_image_url(payload: dict[str, Any]) -> str | None:
         if isinstance(values, list):
             urls.extend(str(item) for item in values if item)
     seen: set[str] = set()
+    ordered: list[str] = []
     for url in urls:
         if url not in seen:
-            return url
-        seen.add(url)
-    return None
+            seen.add(url)
+            ordered.append(url)
+    return ordered
 
 
 def short_error(message: str, limit: int = 120) -> str:
@@ -530,17 +552,24 @@ def short_error(message: str, limit: int = 120) -> str:
     return text if len(text) <= limit else text[:limit] + "..."
 
 
-def download_with_retry(client: MxapiImageClient, image_url: str, path: Path, config: MxapiGenerateImagesConfig) -> int:
+def download_with_retry(client: MxapiImageClient, urls: list[str], path: Path, config: MxapiGenerateImagesConfig) -> tuple[int, str]:
+    """逐个地址尝试下载，某地址全部重试失败后自动切换到下一个地址。返回 (文件大小, 实际使用的 URL)。"""
     last_error: Exception | None = None
-    for attempt in range(1, config.max_download_retries + 1):
-        try:
-            return client.download(image_url, path, timeout_seconds=config.download_timeout_seconds)
-        except Exception as exc:
-            last_error = exc
-            if attempt >= config.max_download_retries:
-                break
-            time.sleep(config.retry_delay_seconds * attempt)
-    raise RuntimeError(f"download failed: {last_error}")
+    tried: list[str] = []
+    for url_index, url in enumerate(urls):
+        per_url_error: Exception | None = None
+        for attempt in range(1, config.max_download_retries + 1):
+            try:
+                size = client.download(url, path, timeout_seconds=config.download_timeout_seconds)
+                return size, url
+            except Exception as exc:
+                per_url_error = exc
+                if attempt >= config.max_download_retries:
+                    break
+                time.sleep(config.retry_delay_seconds * attempt)
+        tried.append(f"url#{url_index}({str(url)[:60]}): {per_url_error}")
+        last_error = per_url_error
+    raise RuntimeError(f"download failed after trying {len(urls)} url(s): {last_error}; " + " | ".join(tried))
 
 
 def save_raw_response(config: MxapiGenerateImagesConfig, image_name: str, payload: dict[str, Any]) -> None:

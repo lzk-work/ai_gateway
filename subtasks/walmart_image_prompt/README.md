@@ -49,6 +49,10 @@ subtasks/walmart_image_prompt/config.json
   },
   "execution": {
     "max_records": 1
+  },
+  "oss": {
+    "prefix": "develop",
+    "key_template": "develop/{sku}/{image_name}.png"
   }
 }
 ```
@@ -58,6 +62,7 @@ subtasks/walmart_image_prompt/config.json
 - `max_records: 1`：测试模式，只处理 1 行源数据（1 个 SKU）。
 - `max_records: 100`：批量处理 100 行源数据（100 个 SKU）。
 - `max_records: null`：不限制，处理全部源数据。
+- `oss.prefix` / `oss.key_template`：OSS 上传路径（对象 key 模板），不同任务/不同上传路径在这里改，运行时覆盖阶段配置默认值；未配置时回退到 `stages/upload_oss/config.json`。
 
 阶段配置里不再设置 `max_records`，也不再改业务入参 Excel，避免每个子任务都要单独改。
 
@@ -236,7 +241,7 @@ ALIYUN_OSS_BUCKET=zlx-oss-db
 ALIYUN_OSS_DEFAULT_PREFIX=images
 ```
 
-上传哪些图片、从哪个批次目录读取、OSS key 如何生成，由 `stages/upload_oss/config.json` 和当前批次结果决定。
+上传哪些图片、从哪个批次目录读取、OSS key 如何生成，由 `config.json` 的 `oss` 块决定，未配置时回退到 `stages/upload_oss/config.json` 的默认值。不同任务/不同上传路径只需改各自总配置的 `oss.prefix` / `oss.key_template`，无需改动子配置。
 
 ## 文件归属规则
 
@@ -567,7 +572,10 @@ stages/generate_sub_images/output/image_generation_checkpoint.jsonl
 这样即使手动中断，已经提交到 MXAPI 的 `task_id` 也不会丢。下次运行会读取 checkpoint：
 
 - `success` 跳过。
-- `submitted` 或带 `task_id` 的失败记录会继续轮询。
+- `submitted` 或带 `task_id` 的失败记录先**继续轮询原任务**：任务已完成则直接复用下载（覆盖超时/抖动恢复，不重复扣费）。
+- 轮询确认任务彻底失败（`status=failed`，如上游服务错误、内容安全拦截）→ **自动重新提交生成**新任务，新 `task_id` 覆盖旧记录。
 - 没有 `task_id` 的失败记录会重新提交。
+
+轮询超时（poll timeout）的任务状态未知，仍保留原 `task_id`，下次运行继续复用查询。
 
 Excel 仍然最后统一写回，避免并发频繁打开 Excel 导致锁文件或写乱。

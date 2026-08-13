@@ -106,7 +106,8 @@ def print_execution_confirmation(dry_run: bool = False) -> bool:
 
     print("\n--- 05 上传 OSS ---")
     print_stage_state(switches["upload_oss"])
-    oss = upload_config.get("oss", {})
+    # 业务总配置 config.json 的 oss 块优先，未配置时回退到阶段配置默认值。
+    oss = {**upload_config.get("oss", {}), **load_task_config().get("oss", {})}
     default_prefix = local_env.get("ALIYUN_OSS_DEFAULT_PREFIX", "images").strip("/")
     bucket = local_env.get("ALIYUN_OSS_BUCKET", "<未配置>")
     endpoint = local_env.get("ALIYUN_OSS_ENDPOINT", "<未配置>")

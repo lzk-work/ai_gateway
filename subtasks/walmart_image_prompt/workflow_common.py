@@ -139,6 +139,12 @@ def apply_batch_to_oss_config(config, batch_name: str | None = None):
     config.output_excel_path = str(paths["oss_excel"])
     config.output_results_path = str(paths["oss_results"])
     config.checkpoint_path = str(paths["oss_checkpoint"])
+    # 业务总配置优先：config.json 的 oss 块覆盖阶段配置（stages/upload_oss/config.json）的默认值。
+    task_oss = load_task_config().get("oss", {})
+    if task_oss.get("prefix") is not None:
+        config.oss_prefix = str(task_oss["prefix"]).strip("/")
+    if task_oss.get("key_template") is not None:
+        config.key_template = str(task_oss["key_template"])
     return config
 
 
