@@ -6,11 +6,11 @@
                 "key_template":  "develop/{sku}/{image_name}.png"
             },
     "input":  {
-                  "excel_path":  "E:/WorkSpace/ai_gateway/subtasks/walmart_image_prompt/input/develop_flow_260813.xlsx",
+                  "excel_path":  "E:/WorkSpace/ai_gateway/subtasks/walmart_image_prompt/input/develop_flow_260818.xlsx",
                   "sheet_name":  "Sheet1"
               },
     "execution":  {
-                      "max_records":  1500,
+                      "max_records":  1000,
                       "preflight_model":  true,
                       "concurrency":  10,
                       "image_concurrency":  10,
