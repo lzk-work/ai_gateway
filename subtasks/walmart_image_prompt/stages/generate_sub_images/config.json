@@ -31,6 +31,7 @@
                     "sku":  "SKU",
                     "reference_image":  "参考图片链接",
                     "image_name":  "图片命名",
+                    "image_type":  "图片类型",
                     "status":  "下载结果",
                     "task_id":  "task_id"
                 },

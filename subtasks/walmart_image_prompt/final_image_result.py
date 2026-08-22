@@ -11,6 +11,9 @@ from typing import Any
 from openpyxl import Workbook, load_workbook
 
 
+TASK_ROOT = Path(__file__).resolve().parent
+TOTAL_CONFIG_PATH = TASK_ROOT / "config.json"
+
 OUTPUT_COLUMNS = [
     "SKU",
     "处理后主图",
@@ -23,6 +26,28 @@ OUTPUT_COLUMNS = [
 ]
 
 
+def load_image_selection() -> dict[str, Any]:
+    """从总配置读取 image_selection（与 build/03 共用同一数据源）。"""
+    if not TOTAL_CONFIG_PATH.exists():
+        return {}
+    try:
+        data = json.loads(TOTAL_CONFIG_PATH.read_text(encoding="utf-8-sig"))
+    except Exception:
+        return {}
+    selection = data.get("image_selection") or {}
+    return selection if isinstance(selection, dict) else {}
+
+
+def load_desired_count() -> int:
+    """目标张数：image_selection.desired_count；未配置时按 6 张全量。"""
+    dc = load_image_selection().get("desired_count")
+    return int(dc) if isinstance(dc, int) and dc > 0 else 6
+
+
+def load_image_type_order() -> list[str]:
+    return [str(t).strip() for t in (load_image_selection().get("image_type_order") or []) if str(t).strip()]
+
+
 @dataclass(slots=True)
 class FinalImageResultSummary:
     input_path: Path
@@ -31,11 +56,14 @@ class FinalImageResultSummary:
     eligible_rows: int
     sku_count: int
     complete_sku_count: int
+    desired_count: int = 6
+    missing_by_sku: dict[str, list[str]] | None = None
 
 
 def build_final_image_result(input_path: str | Path, output_path: str | Path) -> FinalImageResultSummary:
     input_path = Path(input_path)
     output_path = Path(output_path)
+    desired_count = load_desired_count()
     rows = read_source_rows(input_path)
     grouped: dict[str, dict[str, Any]] = {}
     eligible_rows = 0
@@ -73,11 +101,7 @@ def build_final_image_result(input_path: str | Path, output_path: str | Path) ->
 
     ordered_rows = list(grouped.values())
     write_result(output_path, ordered_rows)
-    complete_sku_count = sum(
-        1
-        for row in ordered_rows
-        if all(row.get(f"处理后附图{index}") for index in range(1, 7))
-    )
+    complete_sku_count = sum(1 for row in ordered_rows if count_filled_images(row) >= desired_count)
     return FinalImageResultSummary(
         input_path=input_path,
         output_path=output_path,
@@ -85,6 +109,7 @@ def build_final_image_result(input_path: str | Path, output_path: str | Path) ->
         eligible_rows=eligible_rows,
         sku_count=len(ordered_rows),
         complete_sku_count=complete_sku_count,
+        desired_count=desired_count,
     )
 
 
@@ -96,6 +121,7 @@ def build_final_image_result_from_logs(
     oss_results_path = Path(oss_results_path)
     image_results_path = Path(image_results_path)
     output_path = Path(output_path)
+    desired_count = load_desired_count()
     oss_rows = read_jsonl(oss_results_path)
     valid_image_keys = {
         row_key(row)
@@ -143,7 +169,7 @@ def build_final_image_result_from_logs(
 
     ordered_rows = list(grouped.values())
     write_result(output_path, ordered_rows)
-    complete_sku_count = count_complete_skus(ordered_rows)
+    complete_sku_count = count_complete_skus(ordered_rows, desired_count)
     return FinalImageResultSummary(
         input_path=oss_results_path,
         output_path=output_path,
@@ -151,6 +177,8 @@ def build_final_image_result_from_logs(
         eligible_rows=eligible_rows,
         sku_count=len(ordered_rows),
         complete_sku_count=complete_sku_count,
+        desired_count=desired_count,
+        missing_by_sku=collect_missing_types(image_results_path),
     )
 
 
@@ -162,8 +190,9 @@ def preview_final_image_result_from_logs(
     oss_results_path = Path(oss_results_path)
     image_results_path = Path(image_results_path)
     output_path = Path(output_path)
+    desired_count = load_desired_count()
     if not oss_results_path.exists():
-        return FinalImageResultSummary(oss_results_path, output_path, 0, 0, 0, 0)
+        return FinalImageResultSummary(oss_results_path, output_path, 0, 0, 0, 0, desired_count=desired_count)
     valid_image_keys = {
         row_key(row)
         for row in read_jsonl(image_results_path)
@@ -188,7 +217,7 @@ def preview_final_image_result_from_logs(
         seen_keys.add(key)
         eligible_rows += 1
         grouped.setdefault(sku, set()).add(image_index)
-    complete_sku_count = sum(1 for indexes in grouped.values() if len(indexes) == 6)
+    complete_sku_count = sum(1 for indexes in grouped.values() if len(indexes) >= desired_count)
     return FinalImageResultSummary(
         input_path=oss_results_path,
         output_path=output_path,
@@ -196,12 +225,15 @@ def preview_final_image_result_from_logs(
         eligible_rows=eligible_rows,
         sku_count=len(grouped),
         complete_sku_count=complete_sku_count,
+        desired_count=desired_count,
+        missing_by_sku=collect_missing_types(image_results_path),
     )
 
 
 def preview_final_image_result(input_path: str | Path, output_path: str | Path) -> FinalImageResultSummary:
     input_path = Path(input_path)
     output_path = Path(output_path)
+    desired_count = load_desired_count()
     rows = read_source_rows(input_path) if input_path.exists() else []
     grouped: dict[str, set[int]] = {}
     eligible_rows = 0
@@ -219,7 +251,7 @@ def preview_final_image_result(input_path: str | Path, output_path: str | Path) 
             continue
         eligible_rows += 1
         grouped.setdefault(sku, set()).add(image_index)
-    complete_sku_count = sum(1 for indexes in grouped.values() if len(indexes) == 6)
+    complete_sku_count = sum(1 for indexes in grouped.values() if len(indexes) >= desired_count)
     return FinalImageResultSummary(
         input_path=input_path,
         output_path=output_path,
@@ -227,6 +259,7 @@ def preview_final_image_result(input_path: str | Path, output_path: str | Path) 
         eligible_rows=eligible_rows,
         sku_count=len(grouped),
         complete_sku_count=complete_sku_count,
+        desired_count=desired_count,
     )
 
 
@@ -246,12 +279,37 @@ def row_key(row: dict[str, Any]) -> str:
     return f"{row.get('sku')}::{row.get('image_name')}"
 
 
-def count_complete_skus(rows: list[dict[str, str]]) -> int:
-    return sum(
-        1
-        for row in rows
-        if all(row.get(f"处理后附图{index}") for index in range(1, 7))
-    )
+def count_filled_images(row: dict[str, Any]) -> int:
+    return sum(1 for index in range(1, 7) if row.get(f"处理后附图{index}"))
+
+
+def count_complete_skus(rows: list[dict[str, str]], desired_count: int = 6) -> int:
+    return sum(1 for row in rows if count_filled_images(row) >= desired_count)
+
+
+def collect_missing_types(image_results_path: str | Path) -> dict[str, list[str]]:
+    """按 SKU 收集缺失的 image_type：目标未凑满时，候选顺序中未成功生成的部分（供人工补图）。"""
+    rows = read_jsonl(Path(image_results_path))
+    satisfied: dict[str, set[str]] = {}
+    success_count: dict[str, int] = {}
+    for row in rows:
+        sku = str(row.get("sku") or "").strip()
+        image_type = str(row.get("image_type") or "").strip()
+        if not sku:
+            continue
+        if row.get("status") == "success" and image_type:
+            satisfied.setdefault(sku, set()).add(image_type)
+            success_count[sku] = success_count.get(sku, 0) + 1
+    order = load_image_type_order()
+    desired_count = load_desired_count()
+    missing: dict[str, list[str]] = {}
+    for sku, done in satisfied.items():
+        if success_count.get(sku, 0) >= desired_count:
+            continue
+        absent = [t for t in order if t not in done]
+        if absent:
+            missing[sku] = absent
+    return missing
 
 
 def read_source_rows(path: Path) -> list[dict[str, str]]:

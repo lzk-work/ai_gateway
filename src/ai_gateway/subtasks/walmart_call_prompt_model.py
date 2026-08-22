@@ -14,7 +14,13 @@ from typing import Any
 
 import requests
 
-from ai_gateway.clients.openai_chat_client import OpenAIChatClient, extract_chat_text
+from ai_gateway.clients.openai_chat_client import (
+    OpenAIChatClient,
+    build_responses_payload,
+    extract_chat_text,
+    extract_responses_text,
+    is_unsupported_upstream_error,
+)
 from ai_gateway.config.loader import load_app_config
 from ai_gateway.validators.result_validator import extract_json
 
@@ -524,6 +530,36 @@ def records_from_rows(rows: list[dict[str, Any]]) -> list[ModelCallRecord]:
             continue
     return records
 
+def _call_model(
+    client: OpenAIChatClient,
+    payload: dict[str, Any],
+    config: WalmartCallPromptModelConfig,
+) -> tuple[dict[str, Any], int, str]:
+    """Send one model request.
+
+    Primary path is /v1/chat/completions (works for Gemini/Claude upstreams,
+    including the gpt-5.4 alias). If BUZZ rejects the model with
+    `unsupported_upstream` (OpenAI/Codex models like gpt-5.6-luna are not served
+    there), automatically retry on /v1/responses with a converted payload. The
+    Responses API keeps the model's reasoning trace in a separate `reasoning`
+    item, so the final answer arrives clean — no "thinking instead of JSON".
+    """
+    try:
+        if config.stream:
+            response_payload, latency_ms, result_text = stream_chat_completions(client, payload)
+        else:
+            response_payload, latency_ms = client.chat_completions(payload)
+            result_text = extract_chat_text(response_payload)
+        return response_payload, latency_ms, result_text
+    except RuntimeError as exc:
+        if is_unsupported_upstream_error(str(exc)):
+            responses_payload = build_responses_payload(payload)
+            response_payload, latency_ms = client.responses_completions(responses_payload)
+            result_text = extract_responses_text(response_payload)
+            return response_payload, latency_ms, result_text
+        raise
+
+
 def call_one(
     index: int,
     total_pending: int,
@@ -571,11 +607,7 @@ def call_one(
             image_detail=config.image_detail,
         )
         try:
-            if config.stream:
-                response_payload, latency_ms, result_text = stream_chat_completions(client, payload)
-            else:
-                response_payload, latency_ms = client.chat_completions(payload)
-                result_text = extract_chat_text(response_payload)
+            response_payload, latency_ms, result_text = _call_model(client, payload, config)
             full_output_path = save_full_output(config, task_id, sku, model_name, result_text)
             json_parseable, image_plan_count, validation_error = inspect_result_text(result_text)
             validation_status = "passed" if not validation_error else "failed"
@@ -657,6 +689,74 @@ def build_chat_payload(
         "messages": [{"role": "user", "content": content}],
         "temperature": temperature,
     }
+    if max_tokens:
+        payload["max_tokens"] = max_tokens
+    return payload
+
+
+CONTINUE_PROMPT = (
+    "继续。请直接以字符 { 开头输出完整的 JSON 对象，"
+    "不要任何解释、开场白或计划性文字。image_plan 必须包含 6 个对象。"
+)
+
+
+def send_request(client, payload, stream):
+    """Send a chat completion request (stream or not) and return (response, latency_ms, text)."""
+    if stream:
+        return stream_chat_completions(client, payload)
+    response_payload, latency_ms = client.chat_completions(payload)
+    return response_payload, latency_ms, extract_chat_text(response_payload)
+
+
+def is_pure_thinking(text: str) -> bool:
+    """Heuristic: model returned only a thinking/plan preamble without any JSON.
+
+    Used to decide whether a 'continue' follow-up turn can salvage the call.
+    We only treat short, JSON-less responses as pure thinking; truncated JSON
+    (long or containing '{') is left as a normal invalid result.
+    """
+    parsed, err = extract_json(text)
+    if err is None:
+        return False
+    stripped = text.strip()
+    if len(stripped) > 2000:
+        return False
+    if "{" in stripped:
+        return False
+    return True
+
+
+def build_continue_payload(
+    next_payload,
+    source_task,
+    prompt_override,
+    model_name,
+    max_tokens,
+    temperature,
+    image_detail,
+    previous_text,
+):
+    """Build a multi-turn payload that continues a thinking-only first turn.
+
+    messages = [original user (with images), assistant(thinking), user(continue)]
+    """
+    prompt = prompt_override or str(next_payload.get("prompt") or "")
+    if prompt_override:
+        prompt = render_prompt_override(prompt_override, source_task)
+    content = [{"type": "text", "text": prompt}]
+    for image in next_payload.get("images", []):
+        if not isinstance(image, dict) or image.get("type") != "url":
+            continue
+        image_url = {"url": image.get("value")}
+        if image_detail and image_detail != "auto":
+            image_url["detail"] = image_detail
+        content.append({"type": "image_url", "image_url": image_url})
+    messages = [
+        {"role": "user", "content": content},
+        {"role": "assistant", "content": previous_text},
+        {"role": "user", "content": CONTINUE_PROMPT},
+    ]
+    payload = {"model": model_name, "messages": messages, "temperature": temperature}
     if max_tokens:
         payload["max_tokens"] = max_tokens
     return payload

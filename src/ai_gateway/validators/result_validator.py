@@ -100,8 +100,35 @@ def validate_value(value: Any, schema: dict[str, Any], path: str) -> list[str]:
 
 
 def _slice_json_candidate(text: str, start_char: str, end_char: str) -> str | None:
+    """Return the substring spanning the first balanced start_char..end_char pair.
+
+    Uses bracket-balance scanning (respecting string literals and escape
+    sequences) instead of naive first/last search. This keeps JSON extraction
+    robust when the model prepends a free-text preamble that contains stray
+    braces (e.g. "我会生成如下 {…}") or other non-JSON characters.
+    """
     start = text.find(start_char)
-    end = text.rfind(end_char)
-    if start == -1 or end == -1 or end <= start:
+    if start == -1:
         return None
-    return text[start : end + 1]
+    depth = 0
+    in_str = False
+    escaped = False
+    for index in range(start, len(text)):
+        char = text[index]
+        if in_str:
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == '"':
+                in_str = False
+            continue
+        if char == '"':
+            in_str = True
+        elif char == start_char:
+            depth += 1
+        elif char == end_char:
+            depth -= 1
+            if depth == 0:
+                return text[start : index + 1]
+    return None

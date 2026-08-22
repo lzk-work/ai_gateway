@@ -17,6 +17,7 @@
     "template_sku": "SKU",
     "template_reference_image": "参考图片链接",
     "template_image_name": "图片命名",
+    "template_image_type": "图片类型",
     "template_download_result": "下载结果",
     "template_task_id": "task_id"
   },

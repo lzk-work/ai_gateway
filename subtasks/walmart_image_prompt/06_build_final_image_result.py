@@ -31,7 +31,11 @@ def main() -> None:
     print(f"图片结果日志: {image_results_path}")
     print(f"输出Excel: {summary.output_path}")
     print(f"源行数: {summary.source_rows} | 有效副图行: {summary.eligible_rows}")
-    print(f"SKU数量: {summary.sku_count} | 6张完整SKU: {summary.complete_sku_count}")
+    print(f"SKU数量: {summary.sku_count} | 达标SKU({summary.desired_count}张): {summary.complete_sku_count}")
+    if summary.missing_by_sku:
+        print(f"\n缺失类型清单（{len(summary.missing_by_sku)} 个 SKU 未凑满 {summary.desired_count} 张）:")
+        for sku, types in sorted(summary.missing_by_sku.items()):
+            print(f"  {sku}: 缺少 {', '.join(types)}")
     if not args.dry_run:
         print("最终图片结果表生成完成")
 

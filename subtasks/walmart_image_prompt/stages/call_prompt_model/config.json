@@ -11,16 +11,14 @@
                                       "endpoint":  "/v1/chat/completions"
                                   },
                       "model":  {
-                                    "name":  "gpt-5.4",
+                                    "name":  "gpt-5.6-luna",
                                     "candidates":  [
-                                      "gpt-5.4-mini",
-                                      "gpt-5.6-terra",
-                                      "gpt-5.5"
+                                      "gpt-5.4"
                                     ],
                                     "refresh_on_error":  true,
                                     "provider":  "openai",
                                     "api_style":  "chat_completions",
-                                    "stream":  true,
+                                    "stream":  false,
                                     "max_tokens":  12000,
                                     "temperature":  0.2,
                                     "image_detail":  "auto"

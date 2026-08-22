@@ -9,7 +9,7 @@ import shutil
 import time
 import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -53,6 +53,8 @@ class MxapiGenerateImagesConfig:
     retry_delay_seconds: int = 5
     skip_success: bool = True
     poll_existing_task_id: bool = True
+    image_type_order: list[str] = field(default_factory=list)
+    desired_count: int | None = None
 
 
 @dataclass(slots=True)
@@ -60,6 +62,7 @@ class ImageGenerationRecord:
     row_number: int
     sku: str
     image_name: str
+    image_type: str | None
     image_number: int | None
     status: str
     task_id: str | None
@@ -92,7 +95,7 @@ def load_config(path: str | Path) -> MxapiGenerateImagesConfig:
     limits = data.get("limits", {})
     retry = data.get("retry", {})
     resume = data.get("resume", {})
-    return MxapiGenerateImagesConfig(
+    config = MxapiGenerateImagesConfig(
         name=data["name"],
         gateways_path=str(project_root / "configs" / "gateways.yaml"),
         models_path=str(project_root / "configs" / "models.yaml"),
@@ -122,6 +125,23 @@ def load_config(path: str | Path) -> MxapiGenerateImagesConfig:
         skip_success=bool(resume.get("skip_success", True)),
         poll_existing_task_id=bool(resume.get("poll_existing_task_id", True)),
     )
+    # 读业务级总配置（subtasks/walmart_image_prompt/config.json）的 image_selection
+    image_type_order: list[str] = []
+    desired_count: int | None = None
+    task_root = project_root / "subtasks" / "walmart_image_prompt"
+    total_cfg_path = task_root / "config.json"
+    if total_cfg_path.exists():
+        try:
+            total_data = json.loads(total_cfg_path.read_text(encoding="utf-8-sig"))
+            selection = total_data.get("image_selection") or {}
+            image_type_order = [str(t).strip() for t in selection.get("image_type_order", []) if str(t).strip()]
+            dc = selection.get("desired_count")
+            desired_count = int(dc) if isinstance(dc, int) and dc > 0 else None
+        except Exception:
+            pass
+    config.image_type_order = image_type_order
+    config.desired_count = desired_count
+    return config
 
 
 
@@ -141,22 +161,52 @@ class CheckpointStore:
 
     def upsert(self, record: ImageGenerationRecord) -> None:
         with self.lock:
-            self.records[record_key(asdict(record))] = asdict(record)
-            self.flush_locked()
+            row = asdict(record)
+            self.records[record_key(row)] = row
+            self.append_locked(row)
 
-    def flush_locked(self) -> None:
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        temp_path = self.path.with_suffix(self.path.suffix + ".tmp")
-        with temp_path.open("w", encoding="utf-8") as handle:
-            for row in self.records.values():
+    def append_locked(self, row: dict[str, Any]) -> None:
+        """追加写一行（取代全量重写 + os.replace）：锁窗口从“重写整文件”缩到“追加一行”，
+        缓解外部进程锁导致的 PermissionError WinError5。写失败仅告警，不崩整个进程。"""
+        try:
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+            with self.path.open("a", encoding="utf-8") as handle:
                 handle.write(json.dumps(row, ensure_ascii=False) + "\n")
-        temp_path.replace(self.path)
+        except OSError as exc:
+            print(f"[checkpoint] 写入失败(不中断): {exc}", flush=True)
 
 
 def record_key(row: dict[str, Any]) -> str:
     sku = row.get("sku")
     image_name = row.get("image_name")
     return f"{sku}::{image_name}" if sku and image_name else ""
+
+
+class RowProgress:
+    """图片行级全局进度：跨 SKU 线程共享，线程安全地推进“已完成行/总行数”。
+
+    并发下“开始第 N 行”没有唯一含义，故只打完成计数 + 状态，便于观察整体进度。
+    """
+
+    _STATUS_TEXT = {
+        "success": "成功",
+        "pending": "超时待定",
+        "skipped": "跳过",
+        "failed_permanent": "永久失败",
+        "failed": "失败",
+        "submitted": "已提交",
+    }
+
+    def __init__(self, total: int) -> None:
+        self.total = max(int(total), 0)
+        self.done = 0
+        self.lock = threading.Lock()
+
+    def advance(self, status: str, sku: str) -> None:
+        with self.lock:
+            self.done += 1
+            text = self._STATUS_TEXT.get(status, status)
+            print(f"[进度 {self.done}/{self.total} 行] SKU={sku} | {text}", flush=True)
 
 def run(config: MxapiGenerateImagesConfig) -> list[ImageGenerationRecord]:
     app_config = load_app_config(config.gateways_path, config.models_path)
@@ -205,6 +255,8 @@ def load_work_rows(config: MxapiGenerateImagesConfig):
         raise RuntimeError("Missing image input headers: " + ", ".join(missing))
 
     rows: list[dict[str, Any]] = []
+    image_type_header = config.columns.get("image_type")
+    has_image_type = bool(image_type_header) and image_type_header in headers
     for row_number in range(2, sheet.max_row + 1):
         sku = cell_text(sheet, row_number, headers[config.columns["sku"]])
         image_name = cell_text(sheet, row_number, headers[config.columns["image_name"]])
@@ -213,17 +265,18 @@ def load_work_rows(config: MxapiGenerateImagesConfig):
         task_id = cell_text(sheet, row_number, headers[config.columns["task_id"]])
         if not sku or not image_name:
             continue
-        rows.append(
-            {
-                "row_number": row_number,
-                "sku": sku,
-                "image_name": image_name,
-                "reference_image": reference_image,
-                "status": status,
-                "task_id": task_id,
-                "image_number": parse_image_number(image_name),
-            }
-        )
+        row = {
+            "row_number": row_number,
+            "sku": sku,
+            "image_name": image_name,
+            "reference_image": reference_image,
+            "status": status,
+            "task_id": task_id,
+            "image_number": parse_image_number(image_name),
+        }
+        if has_image_type:
+            row["image_type"] = cell_text(sheet, row_number, headers[image_type_header])
+        rows.append(row)
     return rows, workbook, sheet, headers
 
 
@@ -271,7 +324,14 @@ def limit_rows_by_sku(rows: list[dict[str, Any]], max_records: int | None) -> li
 
 
 def completed_keys(rows: list[dict[str, Any]]) -> set[str]:
-    return {record_key(row) for row in rows if is_completed_success(row)}
+    return {record_key(row) for row in rows if is_terminal_skippable(row)}
+
+
+def is_terminal_skippable(row: dict[str, Any]) -> bool:
+    """续跑时可直接跳过的终态：成功 或 已主动跳过（目标张数已满足）。"""
+    if row.get("status") == "skipped":
+        return True
+    return is_completed_success(row)
 
 
 def is_completed_success(row: dict[str, Any]) -> bool:
@@ -369,24 +429,64 @@ def process_rows(
 ) -> list[ImageGenerationRecord]:
     if not rows:
         return []
+    # 按 SKU 分组：SKU 内按 image_type_order 串行，SKU 间并发
+    by_sku: dict[str, list[dict[str, Any]]] = {}
+    for row in rows:
+        sku = str(row.get("sku") or "").strip()
+        if sku:
+            by_sku.setdefault(sku, []).append(row)
+    order_index = {t: i for i, t in enumerate(config.image_type_order)}
+    def sort_key(r: dict[str, Any]) -> int:
+        it = str(r.get("image_type") or "").strip()
+        return order_index.get(it, len(order_index))
+
     concurrency = max(int(config.concurrency or 1), 1)
-    concurrency = min(concurrency, len(rows))
-    print(f"图片生成并发: {concurrency}", flush=True)
-    if concurrency == 1:
-        records = []
-        for index, row in enumerate(rows, start=1):
-            records.append(process_one(index, len(rows), row, prompt_map, config, client, checkpoint_store))
+    concurrency = min(concurrency, max(len(by_sku), 1))
+    print(f"图片生成并发(SKU级): {concurrency} | SKU数={len(by_sku)}", flush=True)
+    progress = RowProgress(len(rows))
+
+    def process_sku(sku: str, sku_rows: list[dict[str, Any]]) -> list[ImageGenerationRecord]:
+        sku_rows = sorted(sku_rows, key=sort_key)
+        records: list[ImageGenerationRecord] = []
+        # 重启续跑：该 SKU 已有成功数从 checkpoint 统计（pending_rows 只含未成功行）
+        satisfied = sum(
+            1
+            for saved in checkpoint_store.rows()
+            if str(saved.get("sku") or "").strip() == sku and saved.get("status") == "success"
+        )
+        print(
+            f"开始处理 SKU={sku} | 已有成功={satisfied} | 目标={config.desired_count or '-'} | 候选行={len(sku_rows)}",
+            flush=True,
+        )
+        for position, row in enumerate(sku_rows, start=1):
+            if config.desired_count and satisfied >= config.desired_count:
+                # 已满足目标张数：跳过该 SKU 剩余类型行（不生成、不判失败）
+                rec = build_skipped_record(row)
+                records.append(rec)
+                progress.advance(rec.status, sku)
+                continue
+            if row.get("status") == "failed_permanent":
+                # 跨重启：该类型已确认永久失败，不再重新提交；后续行（后位类型）继续补位
+                rec = build_permanent_record(row, "已被安全策略拦截，永久放弃")
+                records.append(rec)
+                progress.advance(rec.status, sku)
+                continue
+            rec = process_one(position, len(sku_rows), row, prompt_map, config, client, checkpoint_store)
+            records.append(rec)
+            progress.advance(rec.status, sku)
+            if rec.status == "success":
+                satisfied += 1
         return records
-    results: dict[int, ImageGenerationRecord] = {}
+
+    all_records: list[ImageGenerationRecord] = []
     with ThreadPoolExecutor(max_workers=concurrency) as executor:
         futures = {
-            executor.submit(process_one, index, len(rows), row, prompt_map, config, client, checkpoint_store): index
-            for index, row in enumerate(rows, start=1)
+            executor.submit(process_sku, sku, srows): sku
+            for sku, srows in by_sku.items()
         }
         for future in as_completed(futures):
-            index = futures[future]
-            results[index] = future.result()
-    return [results[index] for index in sorted(results)]
+            all_records.extend(future.result())
+    return all_records
 
 
 def process_one(
@@ -422,6 +522,15 @@ def process_one(
             try:
                 poll_result, poll_count, wait_seconds = poll_until_done(client, task_id, config)
             except TaskFailedError as exc:
+                if is_permanent_failure(str(exc)):
+                    # 永久失败（内容安全拦截）：不重新提交，标记 failed_permanent，后续行（后位类型）自然补位
+                    record = build_permanent_record(row, str(exc), task_id=task_id)
+                    checkpoint_store.upsert(record)
+                    print(
+                        f"[{index}/{total}] 永久失败(安全策略) | SKU={sku} | 类型={row.get('image_type') or '-'} | 错误={short_error(str(exc))}",
+                        flush=True,
+                    )
+                    return record
                 # 原任务确认彻底失败（status=failed）→ 丢弃旧 task_id，重新提交生成
                 print(
                     f"[{index}/{total}] 旧任务失败，重新生成 | SKU={sku} | 旧task_id={task_id} | 原因={short_error(str(exc))}",
@@ -446,6 +555,7 @@ def process_one(
             row_number=row["row_number"],
             sku=sku,
             image_name=image_name,
+            image_type=row.get("image_type"),
             image_number=image_number,
             status="success",
             task_id=task_id,
@@ -463,10 +573,24 @@ def process_one(
         checkpoint_store.upsert(record)
         print(f"[{index}/{total}] 生成成功 | SKU={sku} | 文件={download_path.name}", flush=True)
         return record
-    except Exception as exc:
-        record = build_error_record(row, exc.__class__.__name__, str(exc), task_id=task_id, submit_latency_ms=submit_latency_ms)
+    except PollTimeoutError as exc:
+        # 超时≠失败：保留 task_id，标记 pending，待下次续跑按 task_id 重新查询收敛。
+        record = build_pending_record(row, str(exc), task_id=task_id, submit_latency_ms=submit_latency_ms)
         checkpoint_store.upsert(record)
-        print(f"[{index}/{total}] 生成失败 | SKU={sku} | 错误={short_error(str(exc))}", flush=True)
+        print(f"[{index}/{total}] 轮询超时(保留task_id待续跑) | SKU={sku} | task_id={task_id}", flush=True)
+        return record
+    except Exception as exc:
+        error_msg = str(exc)
+        if is_permanent_failure(error_msg):
+            record = build_permanent_record(row, error_msg, task_id=task_id, submit_latency_ms=submit_latency_ms)
+            print(
+                f"[{index}/{total}] 永久失败(安全策略) | SKU={sku} | 类型={row.get('image_type') or '-'} | 错误={short_error(error_msg)}",
+                flush=True,
+            )
+        else:
+            record = build_error_record(row, exc.__class__.__name__, error_msg, task_id=task_id, submit_latency_ms=submit_latency_ms)
+            print(f"[{index}/{total}] 生成失败 | SKU={sku} | 错误={short_error(error_msg)}", flush=True)
+        checkpoint_store.upsert(record)
         return record
 
 
@@ -502,6 +626,10 @@ class TaskFailedError(RuntimeError):
     """MXAPI 任务确认失败（data.status == 'failed'），区别于超时/网络异常。"""
 
 
+class PollTimeoutError(RuntimeError):
+    """本地轮询超时：仅表示本侧未在 max_wait_seconds 内等到结果，平台侧任务可能已成功。"""
+
+
 def poll_until_done(client: MxapiImageClient, task_id: str, config: MxapiGenerateImagesConfig) -> tuple[dict[str, Any], int, int]:
     started = time.time()
     poll_count = 0
@@ -521,7 +649,7 @@ def poll_until_done(client: MxapiImageClient, task_id: str, config: MxapiGenerat
             # 真实错误在 error_msg 字段（部分服务返回 error），一并兼容读取
             error_msg = str(data.get("error_msg") or data.get("error") or "task failed")
             raise TaskFailedError(error_msg)
-    raise RuntimeError(f"poll timeout after {config.max_wait_seconds}s: {last_payload}")
+    raise PollTimeoutError(f"poll timeout after {config.max_wait_seconds}s: {last_payload}")
 
 
 def collect_image_urls(payload: dict[str, Any]) -> list[str]:
@@ -590,6 +718,7 @@ def build_submitted_record(
         row_number=row["row_number"],
         sku=row["sku"],
         image_name=row["image_name"],
+        image_type=row.get("image_type"),
         image_number=row.get("image_number"),
         status="submitted",
         task_id=task_id,
@@ -615,6 +744,7 @@ def build_error_record(
         row_number=row["row_number"],
         sku=row["sku"],
         image_name=row["image_name"],
+        image_type=row.get("image_type"),
         image_number=row.get("image_number"),
         status="failed",
         task_id=task_id or row.get("task_id") or None,
@@ -625,6 +755,94 @@ def build_error_record(
         error_message=f"{error_code}: {error_message}",
         retryable=error_code not in {"PromptNotFound", "ReferenceImageMissing"},
         submit_latency_ms=submit_latency_ms,
+        poll_count=0,
+        total_wait_seconds=None,
+        created_at=datetime.now().isoformat(timespec="seconds"),
+    )
+
+
+PERMANENT_FAILURE_MARKERS = ("safety policy", "content safety", "content_safety", "sensitive")
+
+
+def is_permanent_failure(error_message: str) -> bool:
+    """判断是否永久失败（内容安全拦截等，重试无意义）。默认宽松：仅明确命中才判永久。"""
+    msg = str(error_message).lower()
+    return any(marker in msg for marker in PERMANENT_FAILURE_MARKERS)
+
+
+def build_permanent_record(
+    row: dict[str, Any],
+    error_message: str,
+    task_id: str | None = None,
+    submit_latency_ms: int | None = None,
+) -> ImageGenerationRecord:
+    """永久失败记录：内容安全拦截等，重试/兜底均无意义；跨重启不再重新提交该类型。"""
+    return ImageGenerationRecord(
+        row_number=row["row_number"],
+        sku=row["sku"],
+        image_name=row["image_name"],
+        image_type=row.get("image_type"),
+        image_number=row.get("image_number"),
+        status="failed_permanent",
+        task_id=task_id or row.get("task_id") or None,
+        reference_image=row.get("reference_image"),
+        generated_image_url=None,
+        downloaded_path=None,
+        file_size=None,
+        error_message=f"PermanentFailure: {error_message}",
+        retryable=False,
+        submit_latency_ms=submit_latency_ms,
+        poll_count=0,
+        total_wait_seconds=None,
+        created_at=datetime.now().isoformat(timespec="seconds"),
+    )
+
+
+def build_pending_record(
+    row: dict[str, Any],
+    error_message: str,
+    task_id: str | None = None,
+    submit_latency_ms: int | None = None,
+) -> ImageGenerationRecord:
+    """轮询超时专用记录：状态 pending，保留 task_id，待下次续跑按 task_id 重新查询。不判失败。"""
+    return ImageGenerationRecord(
+        row_number=row["row_number"],
+        sku=row["sku"],
+        image_name=row["image_name"],
+        image_type=row.get("image_type"),
+        image_number=row.get("image_number"),
+        status="pending",
+        task_id=task_id or row.get("task_id") or None,
+        reference_image=row.get("reference_image"),
+        generated_image_url=None,
+        downloaded_path=None,
+        file_size=None,
+        error_message=f"PollTimeout: {error_message}",
+        retryable=True,
+        submit_latency_ms=submit_latency_ms,
+        poll_count=0,
+        total_wait_seconds=None,
+        created_at=datetime.now().isoformat(timespec="seconds"),
+    )
+
+
+def build_skipped_record(row: dict[str, Any]) -> ImageGenerationRecord:
+    """该 SKU 已达目标张数，跳过剩余类型行（不生成、不判失败，续跑也不再处理）。"""
+    return ImageGenerationRecord(
+        row_number=row["row_number"],
+        sku=row["sku"],
+        image_name=row["image_name"],
+        image_type=row.get("image_type"),
+        image_number=row.get("image_number"),
+        status="skipped",
+        task_id=None,
+        reference_image=row.get("reference_image"),
+        generated_image_url=None,
+        downloaded_path=None,
+        file_size=None,
+        error_message="skipped: desired_count satisfied",
+        retryable=False,
+        submit_latency_ms=None,
         poll_count=0,
         total_wait_seconds=None,
         created_at=datetime.now().isoformat(timespec="seconds"),
@@ -644,6 +862,9 @@ def merge_records(existing_rows: list[dict[str, Any]], new_records: list[ImageGe
             current["row_number"] = row["row_number"]
             current["reference_image"] = row.get("reference_image")
             current["image_number"] = row.get("image_number")
+            # 历史 checkpoint 记录可能缺 image_type（新增列之前生成）：以 Excel 行补齐，
+            # 否则 06 的缺失类型清单会把“已成功但类型缺失”的图误判为未生成。
+            current["image_type"] = row.get("image_type")
             ordered.append(current)
             seen.add(key)
     return ordered
@@ -657,8 +878,13 @@ def read_jsonl_if_exists(path: str | Path) -> list[dict[str, Any]]:
     with path.open("r", encoding="utf-8") as handle:
         for line in handle:
             line = line.strip()
-            if line:
+            if not line:
+                continue
+            try:
                 rows.append(json.loads(line))
+            except json.JSONDecodeError:
+                # 追加写崩溃可能残留半行：跳过，同 key 的后续行仍会覆盖旧值
+                continue
     return rows
 
 
@@ -676,7 +902,15 @@ def write_excel(workbook, sheet, headers: dict[str, int], rows: list[dict[str, A
         row_number = row_numbers_by_key.get(record_key(row))
         if not row_number:
             continue
-        sheet.cell(row_number, headers[config.columns["status"]], value="成功" if row.get("status") == "success" else "失败")
+        status = row.get("status")
+        status_text = (
+            "成功" if status == "success"
+            else "超时待定" if status == "pending"
+            else "跳过" if status == "skipped"
+            else "永久失败" if status == "failed_permanent"
+            else "失败"
+        )
+        sheet.cell(row_number, headers[config.columns["status"]], value=status_text)
         sheet.cell(row_number, headers[config.columns["task_id"]], value=row.get("task_id"))
     output_path = Path(config.output_excel_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
