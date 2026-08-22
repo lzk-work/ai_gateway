@@ -51,10 +51,20 @@ def main() -> None:
     else:
         print("跳过 02 调用 BUZZ 模型")
 
+    if switches["generate_main_image"]:
+        run_step("03b_generate_main_images.py", args.dry_run)
+    else:
+        print("跳过 03b 生成并下载主图。如需开启，在 config.json 的 workflow.generate_main_image 改为 true。")
+
     if switches["generate_and_download_images"]:
         run_step("03_generate_and_download_images.py", args.dry_run)
     else:
         print("跳过 03 生成并下载图片。如需开启，在 config.json 的 workflow.generate_and_download_images 改为 true。")
+
+    if switches["upload_main_image"]:
+        run_step("05b_upload_main_oss.py", args.dry_run)
+    else:
+        print("跳过 05b 上传主图 OSS。如需开启，在 config.json 的 workflow.upload_main_image 改为 true。")
 
     if switches["upload_oss"]:
         run_step("05_upload_oss.py", args.dry_run)

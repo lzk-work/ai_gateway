@@ -42,6 +42,8 @@ class MxapiGenerateImagesConfig:
     download_dir: str
     raw_responses_dir: str
     columns: dict[str, str]
+    prompt_mode: str = "buzz"
+    prompt_column: str = "生成提示词"
     max_records: int | None = None
     concurrency: int = 1
     poll_interval_seconds: int = 5
@@ -55,6 +57,7 @@ class MxapiGenerateImagesConfig:
     poll_existing_task_id: bool = True
     image_type_order: list[str] = field(default_factory=list)
     desired_count: int | None = None
+    require_success_results_path: str | None = None
 
 
 @dataclass(slots=True)
@@ -125,6 +128,8 @@ def load_config(path: str | Path) -> MxapiGenerateImagesConfig:
         skip_success=bool(resume.get("skip_success", True)),
         poll_existing_task_id=bool(resume.get("poll_existing_task_id", True)),
     )
+    config.prompt_mode = str(data.get("prompt_mode", "buzz")).strip().lower()
+    config.prompt_column = str(data.get("prompt_column", "生成提示词")).strip()
     # 读业务级总配置（subtasks/walmart_image_prompt/config.json）的 image_selection
     image_type_order: list[str] = []
     desired_count: int | None = None
@@ -141,6 +146,7 @@ def load_config(path: str | Path) -> MxapiGenerateImagesConfig:
             pass
     config.image_type_order = image_type_order
     config.desired_count = desired_count
+    config.require_success_results_path = data.get("require_success_results_path")
     return config
 
 
@@ -195,6 +201,7 @@ class RowProgress:
         "failed_permanent": "永久失败",
         "failed": "失败",
         "submitted": "已提交",
+        "blocked": "依赖未满足",
     }
 
     def __init__(self, total: int) -> None:
@@ -223,19 +230,56 @@ def run(config: MxapiGenerateImagesConfig) -> list[ImageGenerationRecord]:
     if config.max_records and config.max_records > 0:
         pending_rows = limit_rows_by_sku(pending_rows, config.max_records)
 
+    progress = RowProgress(len(rows))
+    blocked_records: list[ImageGenerationRecord] = []
+    require_path = config.require_success_results_path
+    if require_path and Path(require_path).exists():
+        success_skus = _load_success_skus(require_path)
+        kept_rows: list[dict[str, Any]] = []
+        for row in pending_rows:
+            sku = str(row.get("sku") or "").strip()
+            if sku in success_skus:
+                kept_rows.append(row)
+            else:
+                # 依赖未满足（如主图未成功）：不提交 MXAPI，不消耗生成积分；
+                # blocked 非终态(retryable)，续跑会重新判定，主图成功后自动补生成。
+                rec = build_blocked_record(row)
+                blocked_records.append(rec)
+                checkpoint_store.upsert(rec)
+                progress.advance(rec.status, sku)
+        pending_rows = kept_rows
+        print(
+            f"依赖主图成功: 主图成功SKU={len(success_skus)} | "
+            f"因依赖未满足跳过副图行={len(blocked_records)}",
+            flush=True,
+        )
+    elif require_path:
+        print(f"依赖主图成功: 主图结果文件不存在({require_path})，不施加依赖跳过", flush=True)
+
     print("\n=== MXAPI 图片生成阶段 ===", flush=True)
     print(
         f"图片任务总数: {len(rows)} 行 / {count_skus(rows)} 个 SKU | "
-        f"已成功跳过: {len(rows) - len(pending_rows)} 行 | "
+        f"已成功跳过: {len(rows) - len(pending_rows) - len(blocked_records)} 行 | "
+        f"依赖未满足(跳过): {len(blocked_records)} 行 | "
         f"本次待处理: {len(pending_rows)} 行 / {count_skus(pending_rows)} 个 SKU "
         f"(max_records={config.max_records} 个 SKU)",
         flush=True,
     )
-    records = process_rows(pending_rows, prompt_map, config, client, checkpoint_store)
+    records = process_rows(pending_rows, prompt_map, config, client, checkpoint_store, progress)
+    records.extend(blocked_records)
     merged = merge_records(checkpoint_store.rows(), records, rows)
     write_jsonl_rows(merged, config.output_results_path)
     write_excel(workbook, sheet, headers, merged, config)
     return records
+
+
+def _load_success_skus(results_path: str | Path) -> set[str]:
+    """从另一结果 JSONL 中收集 status==success 的 SKU 集合，用于「依赖主图成功才生成副图」判定。"""
+    skus: set[str] = set()
+    for row in read_jsonl_if_exists(results_path):
+        if row.get("status") == "success" and row.get("sku"):
+            skus.add(str(row["sku"]).strip())
+    return skus
 
 
 def load_work_rows(config: MxapiGenerateImagesConfig):
@@ -257,6 +301,8 @@ def load_work_rows(config: MxapiGenerateImagesConfig):
     rows: list[dict[str, Any]] = []
     image_type_header = config.columns.get("image_type")
     has_image_type = bool(image_type_header) and image_type_header in headers
+    prompt_header = config.columns.get("prompt")
+    has_prompt = bool(prompt_header) and prompt_header in headers
     for row_number in range(2, sheet.max_row + 1):
         sku = cell_text(sheet, row_number, headers[config.columns["sku"]])
         image_name = cell_text(sheet, row_number, headers[config.columns["image_name"]])
@@ -276,6 +322,8 @@ def load_work_rows(config: MxapiGenerateImagesConfig):
         }
         if has_image_type:
             row["image_type"] = cell_text(sheet, row_number, headers[image_type_header])
+        if has_prompt:
+            row["prompt"] = cell_text(sheet, row_number, headers[prompt_header])
         rows.append(row)
     return rows, workbook, sheet, headers
 
@@ -426,6 +474,7 @@ def process_rows(
     config: MxapiGenerateImagesConfig,
     client: MxapiImageClient,
     checkpoint_store: CheckpointStore,
+    progress: RowProgress,
 ) -> list[ImageGenerationRecord]:
     if not rows:
         return []
@@ -443,7 +492,6 @@ def process_rows(
     concurrency = max(int(config.concurrency or 1), 1)
     concurrency = min(concurrency, max(len(by_sku), 1))
     print(f"图片生成并发(SKU级): {concurrency} | SKU数={len(by_sku)}", flush=True)
-    progress = RowProgress(len(rows))
 
     def process_sku(sku: str, sku_rows: list[dict[str, Any]]) -> list[ImageGenerationRecord]:
         sku_rows = sorted(sku_rows, key=sort_key)
@@ -502,11 +550,19 @@ def process_one(
     image_name = row["image_name"]
     image_number = row.get("image_number")
     print(f"[{index}/{total}] 开始生成 | SKU={sku} | 图片={image_name}", flush=True)
-    prompt = prompt_map.get(sku, {}).get(image_number or -1, "")
+    if config.prompt_mode == "fixed":
+        # 固定提示词模式（主图）：直接取输入 Excel 的「生成提示词」列，不走 BUZZ image_plan
+        prompt = (row.get("prompt") or "").strip()
+        prompt_error_code = "PromptEmpty"
+        prompt_error_msg = "未找到提示词（fixed 模式请检查输入 Excel 的「生成提示词」列）"
+    else:
+        prompt = prompt_map.get(sku, {}).get(image_number or -1, "")
+        prompt_error_code = "PromptNotFound"
+        prompt_error_msg = "未找到对应 image_plan prompt"
     if not prompt:
-        record = build_error_record(row, "PromptNotFound", "未找到对应 image_plan prompt")
+        record = build_error_record(row, prompt_error_code, prompt_error_msg)
         checkpoint_store.upsert(record)
-        print(f"[{index}/{total}] 生成失败 | SKU={sku} | 错误=未找到对应提示词", flush=True)
+        print(f"[{index}/{total}] 生成失败 | SKU={sku} | 错误={prompt_error_msg}", flush=True)
         return record
     if not row.get("reference_image"):
         record = build_error_record(row, "ReferenceImageMissing", "参考图片链接为空")
@@ -826,6 +882,29 @@ def build_pending_record(
     )
 
 
+def build_blocked_record(row: dict[str, Any]) -> ImageGenerationRecord:
+    """依赖未满足（如主图未成功）：不提交 MXAPI、不消耗积分；非终态(retryable)，续跑会重新判定，主图成功后自动补生成。"""
+    return ImageGenerationRecord(
+        row_number=row["row_number"],
+        sku=row["sku"],
+        image_name=row["image_name"],
+        image_type=row.get("image_type"),
+        image_number=row.get("image_number"),
+        status="blocked",
+        task_id=None,
+        reference_image=row.get("reference_image"),
+        generated_image_url=None,
+        downloaded_path=None,
+        file_size=None,
+        error_message="DependencyNotMet: 主图未成功生成（仅主图成功才生成副图）",
+        retryable=True,
+        submit_latency_ms=None,
+        poll_count=0,
+        total_wait_seconds=None,
+        created_at=datetime.now().isoformat(timespec="seconds"),
+    )
+
+
 def build_skipped_record(row: dict[str, Any]) -> ImageGenerationRecord:
     """该 SKU 已达目标张数，跳过剩余类型行（不生成、不判失败，续跑也不再处理）。"""
     return ImageGenerationRecord(
@@ -908,6 +987,7 @@ def write_excel(workbook, sheet, headers: dict[str, int], rows: list[dict[str, A
             else "超时待定" if status == "pending"
             else "跳过" if status == "skipped"
             else "永久失败" if status == "failed_permanent"
+            else "依赖未满足" if status == "blocked"
             else "失败"
         )
         sheet.cell(row_number, headers[config.columns["status"]], value=status_text)

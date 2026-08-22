@@ -20,6 +20,9 @@ CALL_MODEL_CONFIG = TASK_ROOT / "stages" / "call_prompt_model" / "config.json"
 BUILD_IMAGE_INPUT_CONFIG = TASK_ROOT / "stages" / "build_sub_image_download_input" / "config.json"
 GENERATE_IMAGES_CONFIG = TASK_ROOT / "stages" / "generate_sub_images" / "config.json"
 UPLOAD_OSS_CONFIG = TASK_ROOT / "stages" / "upload_oss" / "config.json"
+BUILD_MAIN_CONFIG = TASK_ROOT / "stages" / "build_main_image_input" / "config.json"
+GENERATE_MAIN_CONFIG = TASK_ROOT / "stages" / "generate_main_image" / "config.json"
+UPLOAD_MAIN_CONFIG = TASK_ROOT / "stages" / "upload_main_image" / "config.json"
 PREFLIGHT_MODELS_OUTPUT = TASK_ROOT / "scripts" / "output" / "available_buzz_models.json"
 BATCHES_ROOT = TASK_ROOT / "batches"
 
@@ -45,6 +48,8 @@ def workflow_switches() -> dict[str, bool]:
         "call_buzz_model": bool(workflow.get("call_buzz_model", True)),
         "generate_and_download_images": bool(workflow.get("generate_and_download_images", False)),
         "upload_oss": bool(workflow.get("upload_oss", False)),
+        "generate_main_image": bool(workflow.get("generate_main_image", False)),
+        "upload_main_image": bool(workflow.get("upload_main_image", False)),
         "build_final_result": bool(workflow.get("build_final_result", True)),
     }
 
@@ -86,6 +91,15 @@ def batch_paths(batch_name: str | None = None) -> dict[str, Path]:
         "oss_checkpoint": root / "05_upload_oss" / "oss_upload_checkpoint.jsonl",
         "oss_excel": root / "05_upload_oss" / "walmart_sub_image_oss_result.xlsx",
         "final_image_excel": root / "05_upload_oss" / "最终图片结果_由sub生成.xlsx",
+        "main_image_input_excel": root / "03b_build_main_image_input" / "walmart_main_image_input_result.xlsx",
+        "main_image_results": root / "04b_generate_main_images" / "image_generation_results.jsonl",
+        "main_image_checkpoint": root / "04b_generate_main_images" / "image_generation_checkpoint.jsonl",
+        "main_image_excel": root / "04b_generate_main_images" / "walmart_main_image_generation_result.xlsx",
+        "main_download_dir": root / "04b_generate_main_images" / "downloaded_images",
+        "main_raw_responses": root / "04b_generate_main_images" / "raw_responses",
+        "main_oss_results": root / "05b_upload_main_oss" / "oss_upload_results.jsonl",
+        "main_oss_checkpoint": root / "05b_upload_main_oss" / "oss_upload_checkpoint.jsonl",
+        "main_oss_excel": root / "05b_upload_main_oss" / "walmart_main_image_oss_result.xlsx",
     }
 
 
@@ -158,6 +172,47 @@ def build_image_input_config_for_batch() -> dict[str, Any]:
         config["input"]["source_sheet_name"] = input_config["sheet_name"]
     config["input"]["model_results_path"] = str(paths["model_results"])
     config["output"]["excel_path"] = str(paths["image_input_excel"])
+    return config
+
+
+def build_main_image_input_config_for_batch() -> dict[str, Any]:
+    config = json.loads(BUILD_MAIN_CONFIG.read_text(encoding="utf-8-sig"))
+    input_config = task_input()
+    paths = batch_paths()
+    if input_config.get("excel_path"):
+        config["input"]["source_excel_path"] = input_config["excel_path"]
+    if input_config.get("sheet_name"):
+        config["input"]["source_sheet_name"] = input_config["sheet_name"]
+    config["output"]["excel_path"] = str(paths["main_image_input_excel"])
+    return config
+
+
+def apply_batch_to_main_image_config(config):
+    paths = batch_paths()
+    config.input_excel_path = str(paths["main_image_input_excel"])
+    config.model_results_path = str(paths["model_results"])
+    config.output_excel_path = str(paths["main_image_excel"])
+    config.output_results_path = str(paths["main_image_results"])
+    config.checkpoint_path = str(paths["main_image_checkpoint"])
+    config.download_dir = str(paths["main_download_dir"])
+    config.raw_responses_dir = str(paths["main_raw_responses"])
+    return config
+
+
+def apply_batch_to_main_oss_config(config, batch_name: str | None = None):
+    paths = batch_paths(batch_name)
+    config.input_excel_path = str(paths["main_image_excel"])
+    config.image_results_path = str(paths["main_image_results"])
+    config.download_dir = str(paths["main_download_dir"])
+    config.output_excel_path = str(paths["main_oss_excel"])
+    config.output_results_path = str(paths["main_oss_results"])
+    config.checkpoint_path = str(paths["main_oss_checkpoint"])
+    # 业务总配置优先：config.json 的 oss 块覆盖阶段配置默认值。
+    task_oss = load_task_config().get("oss", {})
+    if task_oss.get("prefix") is not None:
+        config.oss_prefix = str(task_oss["prefix"]).strip("/")
+    if task_oss.get("key_template") is not None:
+        config.key_template = str(task_oss["key_template"])
     return config
 
 

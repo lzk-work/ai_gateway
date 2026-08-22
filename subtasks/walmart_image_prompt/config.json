@@ -17,7 +17,7 @@
                 "desired_count":  6
             },
     "input":  {
-                  "excel_path":  "E:/WorkSpace/ai_gateway/subtasks/walmart_image_prompt/input/develop_flow_260821.xlsx",
+                  "excel_path":  "E:/WorkSpace/ai_gateway/subtasks/walmart_image_prompt/input/test.xlsx",
                   "sheet_name":  "Sheet1"
               },
     "execution":  {
@@ -32,6 +32,8 @@
                      "call_buzz_model":  true,
                      "generate_and_download_images":  true,
                      "upload_oss":  true,
+                     "generate_main_image":  true,
+                     "upload_main_image":  true,
                      "build_final_result":  true
                  }
 }
