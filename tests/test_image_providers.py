@@ -120,6 +120,45 @@ class ProviderTests(unittest.TestCase):
             self.assertEqual(query.call_count, 3)
             submit.assert_not_called()
 
+    def test_expired_query_retries_then_becomes_pending_without_resubmit(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            row, checkpoint = self.worker_setup(tmp)
+            row["task_id"] = "task_expired"
+            self.gateway.max_retries = 2
+            with patch.object(self.tuzi, "query", side_effect=RuntimeError(
+                    "410 Client Error: Gone; {\"status\":\"expired\",\"message\":\"async task result has been deleted\"}"
+                 )) as query, patch.object(self.tuzi, "submit") as submit:
+                record = engine.process_one(1, 1, row, {}, self.cfg, self.tuzi, checkpoint)
+            self.assertEqual(record.status, "pending")
+            self.assertEqual(record.task_id, "task_expired")
+            self.assertEqual(query.call_count, 3)
+            submit.assert_not_called()
+
+    def test_expired_query_can_recover_on_retry(self):
+        completed = {"status": "completed", "result": {"data": [{"url": "https://image.test/out"}]}}
+        self.gateway.max_retries = 2
+        with patch.object(self.tuzi, "query", side_effect=[
+                RuntimeError("410 Client Error: Gone for url: https://api.tu-zi.com/get-async?id=task_existing"),
+                (completed, 1),
+             ]) as query:
+            result, _, _ = engine.poll_until_done(self.tuzi, "task_existing", self.cfg)
+        self.assertEqual(result, completed)
+        self.assertEqual(query.call_count, 2)
+
+    def test_expired_result_does_not_resubmit_twice(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            row, checkpoint = self.worker_setup(tmp)
+            row.update(task_id="task_new", attempts=1)
+            completed = {"status": "completed", "result": {"data": [{"url": "https://image.test/gone"}]}}
+            with patch.object(self.tuzi, "query", return_value=(completed, 1)), \
+                 patch.object(self.tuzi, "download", side_effect=RuntimeError("HTTP 404: gone")), \
+                 patch.object(self.tuzi, "submit") as submit:
+                record = engine.process_one(1, 1, row, {}, self.cfg, self.tuzi, checkpoint)
+            self.assertEqual(record.status, "failed")
+            self.assertFalse(record.retryable)
+            self.assertEqual(record.attempts, 1)
+            submit.assert_not_called()
+
     def worker_setup(self, tmp):
         self.cfg.prompt_mode = "fixed"
         self.cfg.poll_existing_task_id = True

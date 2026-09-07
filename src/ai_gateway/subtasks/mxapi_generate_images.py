@@ -680,6 +680,28 @@ def process_one(
         return record
     except Exception as exc:
         error_msg = str(exc)
+        if task_id and is_expired_result_error(error_msg):
+            expired_attempts = int(row.get("attempts", 0) or 0)
+            if expired_attempts < 1:
+                print(
+                    f"[{index}/{total}] 旧任务结果已失效，重新生成一次 | SKU={sku} | "
+                    f"旧task_id={task_id} | 原因={short_error(error_msg)}",
+                    flush=True,
+                )
+                retry_row = dict(row)
+                retry_row["task_id"] = None
+                retry_row["attempts"] = expired_attempts + 1
+                return process_one(index, total, retry_row, prompt_map, config, client, checkpoint_store)
+            record = build_error_record(
+                row, "ResultExpired", error_msg, task_id=task_id, submit_latency_ms=submit_latency_ms
+            )
+            record.retryable = False
+            checkpoint_store.upsert(record)
+            print(
+                f"[{index}/{total}] 结果再次失效，停止自动重新生成 | SKU={sku} | task_id={task_id}",
+                flush=True,
+            )
+            return record
         if is_permanent_failure(error_msg):
             prev_attempts = int(row.get("attempts", 0) or 0)
             record = build_permanent_record(
@@ -750,13 +772,26 @@ def query_with_retry(client: MxapiImageClient, task_id: str, config: MxapiGenera
             return client.query(task_id)
         except Exception as exc:
             last_error = exc
-            if not is_retryable_error(exc.__class__.__name__, str(exc)):
+            if not is_temporary_query_error(exc):
                 raise
             if attempt < max_attempts:
                 time.sleep(config.retry_delay_seconds * attempt)
     raise PollQueryTemporaryError(
         f"query temporarily unavailable after {max_attempts} attempts; task_id={task_id}: {last_error}"
     ) from last_error
+
+
+def is_temporary_query_error(exc: Exception) -> bool:
+    """查询端的 410/expired 在 TUZI 实测可能稍后恢复，不能据此重新生成。"""
+    message = " ".join(str(exc).lower().split())
+    tuzi_expired = any(marker in message for marker in (
+        "410 client error",
+        "http 410",
+        '"status":"expired"',
+        '"status": "expired"',
+        "async task result has been deleted",
+    ))
+    return tuzi_expired or is_retryable_error(exc.__class__.__name__, str(exc))
 
 
 def poll_until_done(client: MxapiImageClient, task_id: str, config: MxapiGenerateImagesConfig) -> tuple[dict[str, Any], int, int]:
@@ -792,6 +827,15 @@ def short_error(message: str, limit: int = 120) -> str:
             return "HTTP 504 网关超时"
         return "HTTP HTML 错误页，上游/中转站异常"
     return text if len(text) <= limit else text[:limit] + "..."
+
+
+def is_expired_result_error(message: str) -> bool:
+    """仅识别已取得的输出图片明确失效；查询 410/expired 由查询重试处理。"""
+    text = " ".join(str(message).lower().split())
+    download_gone = "download failed after trying" in text and (
+        "http 404" in text or "http 410" in text
+    )
+    return download_gone
 
 
 def download_with_retry(client: MxapiImageClient, urls: list[str], path: Path, config: MxapiGenerateImagesConfig) -> tuple[int, str]:
@@ -871,6 +915,7 @@ def build_error_record(
         submit_latency_ms=submit_latency_ms,
         poll_count=0,
         total_wait_seconds=None,
+        attempts=int(row.get("attempts", 0) or 0),
         created_at=datetime.now().isoformat(timespec="seconds"),
     )
 
@@ -939,6 +984,7 @@ def build_pending_record(
         submit_latency_ms=submit_latency_ms,
         poll_count=0,
         total_wait_seconds=None,
+        attempts=int(row.get("attempts", 0) or 0),
         created_at=datetime.now().isoformat(timespec="seconds"),
     )
 
