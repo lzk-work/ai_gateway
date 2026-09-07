@@ -20,6 +20,7 @@ class ImagePollResult:
     status: str
     urls: list[str] = field(default_factory=list)
     error: str = ""
+    b64_images: list[str] = field(default_factory=list)
 
 
 class MxapiImageAdapter(MxapiImageClient):
@@ -112,13 +113,24 @@ class TuziImageAdapter(MxapiImageClient):
         if not isinstance(result, dict) or result.get("error"):
             raise ImageProtocolError("Tuzi completed response has invalid/error result")
         data = result.get("data")
-        if not isinstance(data, list) or len(data) != 1:
-            raise ImageProtocolError("Tuzi n=1 response must contain exactly one result.data item")
-        item = data[0]
-        url = item.get("url") if isinstance(item, dict) else None
-        if not isinstance(url, str) or urlparse(url).scheme not in {"https", "http"} or not urlparse(url).netloc:
-            raise ImageProtocolError("Tuzi result missing HTTP image URL (Base64 output is not enabled)")
-        return ImagePollResult("completed", [url])
+        if not isinstance(data, list) or not data:
+            raise ImageProtocolError("Tuzi completed response contains no result.data items")
+        urls: list[str] = []
+        b64_images: list[str] = []
+        for item in data:
+            url = item.get("url") if isinstance(item, dict) else None
+            if isinstance(url, str) and urlparse(url).scheme in {"https", "http"} and urlparse(url).netloc:
+                urls.append(url)
+            b64_json = item.get("b64_json") if isinstance(item, dict) else None
+            if isinstance(b64_json, str) and b64_json.strip():
+                b64_images.append(b64_json)
+        if not urls and not b64_images:
+            raise ImageProtocolError("Tuzi result contains neither HTTP image URL nor Base64 image data")
+        if len(urls) > 1:
+            print(f"警告: TUZI 请求 n=1，但返回 {len(urls)} 张图片；将按顺序尝试下载。", flush=True)
+        if b64_images and not urls:
+            print("警告: TUZI 未返回图片 URL，将使用 b64_json 保存图片。", flush=True)
+        return ImagePollResult("completed", list(dict.fromkeys(urls)), b64_images=b64_images)
 
 
 def create_image_adapter(provider, gateway, submit_endpoint, query_endpoint):

@@ -1,5 +1,6 @@
 """Offline protocol fixtures; no live keys or paid API requests."""
 import importlib.util
+import base64
 import json
 import sys
 import tempfile
@@ -59,11 +60,48 @@ class ProviderTests(unittest.TestCase):
         payload = {"status": "completed", "status_code": 200,
                    "result": {"data": [{"url": "https://image.test/x.png"}]}}
         self.assertEqual(self.tuzi.parse_query(payload).urls, ["https://image.test/x.png"])
-        for result in ({}, {"error": "bad"}, {"data": [{"b64_json": "abc"}]}, {"data": []}):
+        for result in ({}, {"error": "bad"}, {"data": [{"unexpected": "abc"}]}, {"data": []}):
             with self.assertRaises(ImageProtocolError):
                 self.tuzi.parse_query(dict(payload, result=result))
         with self.assertRaises(ImageProtocolError):
             self.tuzi.parse_query(dict(payload, status_code=500))
+
+    def test_completed_accepts_multiple_urls_when_tuzi_ignores_n(self):
+        payload = {"status": "completed", "status_code": 200, "result": {"data": [
+            {"url": "https://image.test/first.png"},
+            {"url": "https://image.test/second.png"},
+        ]}}
+        self.assertEqual(
+            self.tuzi.parse_query(payload).urls,
+            ["https://image.test/first.png", "https://image.test/second.png"],
+        )
+
+    def test_completed_accepts_base64_when_tuzi_ignores_response_format(self):
+        encoded = base64.b64encode(b"png-test-data").decode("ascii")
+        payload = {"status": "completed", "status_code": 200,
+                   "result": {"data": [{"url": "", "b64_json": encoded}]}}
+        parsed = self.tuzi.parse_query(payload)
+        self.assertEqual(parsed.urls, [])
+        self.assertEqual(parsed.b64_images, [encoded])
+
+    def test_base64_result_is_saved_without_http_download(self):
+        encoded = base64.b64encode(b"png-test-data").decode("ascii")
+        parsed = self.tuzi.parse_query({"status": "completed", "status_code": 200,
+                                        "result": {"data": [{"b64_json": encoded}]}})
+        with tempfile.TemporaryDirectory() as tmp, patch.object(self.tuzi, "download") as download:
+            path = Path(tmp) / "image.png"
+            size, used_url = engine.save_image_result(self.tuzi, parsed, path, self.cfg)
+            self.assertEqual(path.read_bytes(), b"png-test-data")
+            self.assertEqual(size, len(b"png-test-data"))
+            self.assertIsNone(used_url)
+            download.assert_not_called()
+
+    def test_invalid_base64_is_rejected_when_saving(self):
+        parsed = self.tuzi.parse_query({"status": "completed", "status_code": 200,
+                                        "result": {"data": [{"b64_json": "not-valid-base64"}]}})
+        with tempfile.TemporaryDirectory() as tmp:
+            with self.assertRaises(RuntimeError):
+                engine.save_image_result(self.tuzi, parsed, Path(tmp) / "image.png", self.cfg)
 
     def test_mx_results_unchanged(self):
         payload = {"code": 200, "data": {"status": "completed",
@@ -221,6 +259,23 @@ class ProviderTests(unittest.TestCase):
         with patch.object(self.tuzi, "submit", side_effect=[TimeoutError("timeout"), ({"id": "task_ok"}, 1)]) as submit:
             self.assertEqual(engine.submit_with_retry(self.tuzi, "p", "r", self.cfg), ("task_ok", 1))
             self.assertEqual(submit.call_count, 2)
+
+    def test_uncertain_result_pauses_sku_fallback(self):
+        base = dict(row_number=2, sku="sku1", image_name="new_sub5_sku1", image_type="type5",
+                    image_number=5, reference_image="ref", generated_image_url=None,
+                    downloaded_path=None, file_size=None, retryable=True, submit_latency_ms=None,
+                    poll_count=0, total_wait_seconds=None)
+        pending = engine.ImageGenerationRecord(status="pending", task_id="task1", error_message="PollTimeout: 410", **base)
+        unknown = engine.ImageGenerationRecord(status="failed", task_id=None,
+                                               error_message="SubmissionUnknown: timeout", **base)
+        incomplete = engine.ImageGenerationRecord(status="failed", task_id="task1",
+                                                  error_message="ImageProtocolError: no data", **base)
+        failed = engine.ImageGenerationRecord(status="failed", task_id="task1",
+                                              error_message="TaskFailedError: upstream failed", **base)
+        self.assertTrue(engine.should_pause_sku_after_record(pending))
+        self.assertTrue(engine.should_pause_sku_after_record(unknown))
+        self.assertTrue(engine.should_pause_sku_after_record(incomplete))
+        self.assertFalse(engine.should_pause_sku_after_record(failed))
 
     def test_checkpoint_failure_prevents_submission(self):
         with tempfile.TemporaryDirectory() as tmp:

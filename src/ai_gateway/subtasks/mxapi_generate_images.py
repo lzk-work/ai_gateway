@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import argparse
+import base64
+import binascii
 import json
 import re
 import shutil
@@ -555,6 +557,12 @@ def process_rows(
             progress.advance(rec.status, sku)
             if rec.status == "success":
                 satisfied += 1
+            elif should_pause_sku_after_record(rec):
+                print(
+                    f"暂停 SKU={sku} 后续候选 | 当前图片状态未确定 | task_id={rec.task_id or '-'}",
+                    flush=True,
+                )
+                break
         return records
 
     all_records: list[ImageGenerationRecord] = []
@@ -566,6 +574,14 @@ def process_rows(
         for future in as_completed(futures):
             all_records.extend(future.result())
     return all_records
+
+
+def should_pause_sku_after_record(record: ImageGenerationRecord) -> bool:
+    """结果未确定时暂停同 SKU 补位，避免 pending 图片稍后成功后总数超过目标。"""
+    if record.status in {"pending", "submission_unknown"}:
+        return True
+    error = str(record.error_message or "")
+    return error.startswith("SubmissionUnknown:") or error.startswith("ImageProtocolError:")
 
 
 def process_one(
@@ -593,12 +609,18 @@ def process_one(
     if not prompt:
         record = build_error_record(row, prompt_error_code, prompt_error_msg)
         checkpoint_store.upsert(record)
-        print(f"[{index}/{total}] 生成失败 | SKU={sku} | 错误={prompt_error_msg}", flush=True)
+        print(
+            f"[{index}/{total}] 生成失败 | SKU={sku} | task_id={record.task_id or '-'} | 错误={prompt_error_msg}",
+            flush=True,
+        )
         return record
     if not row.get("reference_image"):
         record = build_error_record(row, "ReferenceImageMissing", "参考图片链接为空")
         checkpoint_store.upsert(record)
-        print(f"[{index}/{total}] 生成失败 | SKU={sku} | 错误=参考图片链接为空", flush=True)
+        print(
+            f"[{index}/{total}] 生成失败 | SKU={sku} | task_id={record.task_id or '-'} | 错误=参考图片链接为空",
+            flush=True,
+        )
         return record
 
     task_id = (row.get("task_id") or None) if config.poll_existing_task_id else None
@@ -635,11 +657,9 @@ def process_one(
             checkpoint_store.upsert(build_submitted_record(row, task_id, submit_latency_ms))
             print(f"[{index}/{total}] 已提交 | SKU={sku} | task_id={task_id}", flush=True)
             poll_result, poll_count, wait_seconds = poll_until_done(client, task_id, config)
-        image_urls = client.parse_query(poll_result).urls
-        if not image_urls:
-            raise RuntimeError("结果中无图片URL")
+        parsed_result = client.parse_query(poll_result)
         download_path = Path(config.download_dir) / f"{image_name}.png"
-        file_size, used_url = download_with_retry(client, image_urls, download_path, config)
+        file_size, used_url = save_image_result(client, parsed_result, download_path, config)
         save_raw_response(config, image_name, poll_result)
         record = ImageGenerationRecord(
             row_number=row["row_number"],
@@ -713,7 +733,11 @@ def process_one(
             )
         else:
             record = build_error_record(row, exc.__class__.__name__, error_msg, task_id=task_id, submit_latency_ms=submit_latency_ms)
-            print(f"[{index}/{total}] 生成失败 | SKU={sku} | 错误={short_error(error_msg)}", flush=True)
+            print(
+                f"[{index}/{total}] 生成失败 | SKU={sku} | task_id={record.task_id or '-'} | "
+                f"错误={short_error(error_msg)}",
+                flush=True,
+            )
         checkpoint_store.upsert(record)
         return record
 
@@ -856,6 +880,30 @@ def download_with_retry(client: MxapiImageClient, urls: list[str], path: Path, c
         tried.append(f"url#{url_index}({str(url)[:60]}): {per_url_error}")
         last_error = per_url_error
     raise RuntimeError(f"download failed after trying {len(urls)} url(s): {last_error}; " + " | ".join(tried))
+
+
+def save_image_result(client, result, path: Path, config: MxapiGenerateImagesConfig) -> tuple[int, str | None]:
+    """优先下载 URL；URL 缺失或全部失效时，使用平台返回的 Base64 图片。"""
+    url_error: Exception | None = None
+    if result.urls:
+        try:
+            return download_with_retry(client, result.urls, path, config)
+        except Exception as exc:
+            url_error = exc
+    for encoded in result.b64_images:
+        try:
+            compact = "".join(encoded.split())
+            content = base64.b64decode(compact, validate=True)
+            if not content:
+                raise ValueError("decoded Base64 image is empty")
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(content)
+            return path.stat().st_size, None
+        except (ValueError, binascii.Error) as exc:
+            url_error = exc
+    if url_error:
+        raise RuntimeError(f"unable to save URL/Base64 image result: {url_error}") from url_error
+    raise RuntimeError("result contains no usable URL or Base64 image")
 
 
 def save_raw_response(config: MxapiGenerateImagesConfig, image_name: str, payload: dict[str, Any]) -> None:
