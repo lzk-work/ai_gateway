@@ -179,7 +179,7 @@ Walmart 的 BUZZ 调用与兔子、MXAPI 共用 ai_gateway.retry_policy.gateway_
 
 ## Walmart 文本模型接口
 
-当前 `gpt-5.6-luna` 属于 OpenAI/Codex 上游，BUZZ 不支持通过 `/v1/chat/completions` 对它进行流式调用。Walmart 阶段配置为 `stream=false`，`gpt-*` 模型直接走非流式 `/v1/responses`，不会先发送一次必然返回 400 的 Chat Completions 请求。其他模型仍保留 `unsupported_upstream` 兼容回退。
+`gpt-*` 属于 OpenAI/Codex 上游，固定使用 `/v1/responses`。`stream=true` 时解析 Responses SSE，必须收到 `response.completed` 才判定成功；`response.failed`、`response.incomplete`、流内 `error` 或提前断流均判定失败。`stream=false` 时读取完整 Responses JSON。其他模型使用 `/v1/chat/completions`，并按同一 `stream` 开关选择 SSE 或 JSON；若平台明确要求 Responses，则自动切换到同协议的流式或非流式实现。
 
 ## 11. 适配器配置建议
 

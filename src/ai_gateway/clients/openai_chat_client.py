@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import time
 from typing import Any
 
@@ -40,8 +41,7 @@ class OpenAIChatClient:
         )
         latency_ms = int((time.perf_counter() - started) * 1000)
         response.encoding = "utf-8"
-        if response.status_code >= 400:
-            raise RuntimeError(f"HTTP {response.status_code}: {response.text[:1000]}")
+        _raise_for_status(response)
         return response.json(), latency_ms
 
     def responses_completions(
@@ -66,6 +66,79 @@ class OpenAIChatClient:
         _raise_for_status(response)
         return response.json(), latency_ms
 
+    def responses_streaming(
+        self, payload: dict[str, Any]
+    ) -> tuple[dict[str, Any], int, str]:
+        """Consume a Responses API SSE stream and return its normalized result."""
+        url = self.gateway.base_url.rstrip("/") + "/v1/responses"
+        stream_payload = dict(payload)
+        stream_payload["stream"] = True
+        started = time.perf_counter()
+        text_parts: list[str] = []
+        final_response: dict[str, Any] | None = None
+        completed = False
+        with requests.post(
+            url,
+            headers={
+                **self.auth_headers(),
+                "Content-Type": "application/json",
+                "Accept": "text/event-stream",
+                "User-Agent": "Mozilla/5.0",
+            },
+            json=stream_payload,
+            stream=True,
+            timeout=self.gateway.timeout_seconds,
+        ) as response:
+            response.encoding = "utf-8"
+            _raise_for_status(response)
+            event_name: str | None = None
+            for raw_line in response.iter_lines(decode_unicode=True):
+                if not raw_line:
+                    continue
+                line = raw_line.strip()
+                if line.startswith("event:"):
+                    event_name = line.removeprefix("event:").strip()
+                    continue
+                if not line.startswith("data:"):
+                    continue
+                data = line.removeprefix("data:").strip()
+                if data == "[DONE]":
+                    break
+                try:
+                    event = json.loads(data)
+                except json.JSONDecodeError as exc:
+                    raise RuntimeError(f"BUZZ Responses SSE invalid JSON: {data[:300]}") from exc
+                event_type = str(event.get("type") or event_name or "")
+                event_name = None
+                response_data = event.get("response")
+                if isinstance(response_data, dict):
+                    final_response = response_data
+                if event_type == "response.output_text.delta":
+                    delta = event.get("delta")
+                    if isinstance(delta, str):
+                        text_parts.append(delta)
+                elif event_type == "response.completed":
+                    completed = True
+                    break
+                elif event_type in {"response.failed", "response.incomplete", "error"}:
+                    detail = event.get("error") or response_data or event
+                    raise RuntimeError(
+                        f"BUZZ Responses SSE {event_type}: "
+                        f"{json.dumps(detail, ensure_ascii=False)[:1000]}"
+                    )
+        latency_ms = int((time.perf_counter() - started) * 1000)
+        if not completed:
+            raise RuntimeError("BUZZ Responses SSE ended before response.completed")
+        result_text = "".join(text_parts)
+        if not result_text and final_response:
+            result_text = extract_responses_text(final_response)
+        if not result_text.strip():
+            raise RuntimeError("BUZZ Responses SSE completed without output text")
+        normalized = final_response or {"object": "response", "output": []}
+        if not extract_responses_text(normalized):
+            normalized = {**normalized, "output_text": result_text}
+        return normalized, latency_ms, result_text
+
 
 def extract_chat_text(response_payload: dict[str, Any]) -> str:
     choices = response_payload.get("choices") or []
@@ -89,13 +162,29 @@ class UnsupportedUpstreamError(RuntimeError):
     caller should retry against the /v1/responses endpoint instead."""
 
 
+class ReferenceImageNotFoundError(RuntimeError):
+    """The upstream could not download an input image because it returned 404."""
+
+
 def is_unsupported_upstream_error(message: str) -> bool:
     return "unsupported_upstream" in message or "/v1/responses" in message
+
+
+def is_reference_image_not_found_error(message: str) -> bool:
+    text = message.lower()
+    download_failed = (
+        "failed to download file" in text
+        or "error while downloading file" in text
+        or "error getting file type" in text
+    )
+    return download_failed and ("status code: 404" in text or "upstream status code: 404" in text)
 
 
 def _raise_for_status(response: "requests.Response") -> None:
     if response.status_code >= 400:
         body = response.text[:1000]
+        if is_reference_image_not_found_error(body):
+            raise ReferenceImageNotFoundError(f"参考图片失效: HTTP {response.status_code}: {body}")
         if is_unsupported_upstream_error(body):
             raise UnsupportedUpstreamError(f"HTTP {response.status_code}: {body}")
         raise RuntimeError(f"HTTP {response.status_code}: {body}")

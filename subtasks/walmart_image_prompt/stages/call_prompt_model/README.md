@@ -26,7 +26,7 @@ subtasks/walmart_image_prompt/stages/call_prompt_model/config.json
 - `execution.gateway.name`：当前为 `buzz`。
 - `execution.model.name`：当前首选 `gpt-5.6-luna`。
 - `execution.model.candidates`：当前候选为 `gpt-5.4`。
-- `execution.model.stream`：当前为 `false`。`gpt-5.6-luna` 属于 OpenAI/Codex 上游，`gpt-*` 模型直接由 BUZZ 的非流式 `/v1/responses` 接口处理，不再先请求 `/v1/chat/completions`。
+- `execution.model.stream`：当前为 `true`。`gpt-*` 模型走 `/v1/responses` SSE；其他模型走 `/v1/chat/completions` SSE。改为 `false` 时保持相同协议，只切换为完整 JSON 响应。
 - `execution.model.max_tokens`：当前为 `12000`。
 
 ## 输出

@@ -21,7 +21,7 @@
                   "sheet_name":  "Sheet1"
               },
     "execution":  {
-                      "max_records":  1000,
+                      "max_records":  1500,
                       "preflight_model":  true,
                       "concurrency":  8,
                       "image_concurrency":  10,

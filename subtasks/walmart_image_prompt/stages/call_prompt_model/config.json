@@ -8,10 +8,11 @@
     "model": {
       "name": "gpt-5.6-luna",
       "candidates": [
+        "gpt-5.6-terra",
         "gpt-5.4"
       ],
       "refresh_on_error": true,
-      "stream": false,
+      "stream": true,
       "max_tokens": 12000,
       "temperature": 0.2,
       "image_detail": "auto"

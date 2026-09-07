@@ -352,6 +352,8 @@ def format_ms(value: int) -> str:
 
 def short_error(message: str, limit: int = 120) -> str:
     text = " ".join(str(message).split())
+    if "参考图片失效" in text:
+        return "参考图片失效"
     if "<!DOCTYPE html>" in text or "<html" in text.lower():
         if "HTTP 520" in text:
             return "HTTP 520 Cloudflare HTML 错误页，上游/中转站异常"
@@ -539,8 +541,10 @@ def _call_model(
     Other models use /v1/chat/completions and retain the compatibility fallback.
     """
     model_name = str(payload.get("model") or "").lower()
-    if not config.stream and model_name.startswith("gpt-"):
+    if model_name.startswith("gpt-"):
         responses_payload = build_responses_payload(payload)
+        if config.stream:
+            return client.responses_streaming(responses_payload)
         response_payload, latency_ms = client.responses_completions(responses_payload)
         result_text = extract_responses_text(response_payload)
         return response_payload, latency_ms, result_text
@@ -554,6 +558,8 @@ def _call_model(
     except RuntimeError as exc:
         if is_unsupported_upstream_error(str(exc)):
             responses_payload = build_responses_payload(payload)
+            if config.stream:
+                return client.responses_streaming(responses_payload)
             response_payload, latency_ms = client.responses_completions(responses_payload)
             result_text = extract_responses_text(response_payload)
             return response_payload, latency_ms, result_text
@@ -816,7 +822,16 @@ def build_error_record(
 
 def is_retryable_error_message(message: str) -> bool:
     retryable_markers = ("HTTP 429", "HTTP 500", "HTTP 502", "HTTP 503", "HTTP 504", "HTTP 525", "timeout", "timed out")
-    non_retryable_markers = ("HTTP 400", "HTTP 401", "HTTP 403", "model_not_found", "invalid_request")
+    non_retryable_markers = (
+        "参考图片失效",
+        "failed to download file",
+        "Error while downloading file",
+        "HTTP 400",
+        "HTTP 401",
+        "HTTP 403",
+        "model_not_found",
+        "invalid_request",
+    )
     if any(marker in message for marker in non_retryable_markers):
         return False
     return any(marker in message for marker in retryable_markers)
@@ -834,7 +849,7 @@ def is_model_unavailable_error_message(message: str) -> bool:
 def stream_chat_completions(
     client: OpenAIChatClient,
     payload: dict[str, Any],
-) -> tuple[dict[str, Any], int]:
+) -> tuple[dict[str, Any], int, str]:
     payload = dict(payload)
     payload["stream"] = True
     url = client.gateway.base_url.rstrip("/") + "/v1/chat/completions"
@@ -1157,8 +1172,6 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-
-
 
 
 
