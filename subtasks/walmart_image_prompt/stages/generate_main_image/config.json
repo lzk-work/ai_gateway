@@ -1,0 +1,39 @@
+{
+  "name": "generate_main_image",
+  "description": "主图固定提示词生成：读取 new_main_{sku} 入参，调用总配置选定的平台 生成主图并下载。",
+  "execution": {
+    "model": {
+      "name": "gpt-image-2",
+      "aspect_ratio": "1:1",
+      "quality": "low",
+      "resolution": "1K"
+    }
+  },
+  "prompt_mode": "fixed",
+  "input": {
+    "sheet_name": "Sheet1"
+  },
+  "columns": {
+    "sku": "SKU",
+    "reference_image": "参考图片链接",
+    "image_name": "图片命名",
+    "image_type": "图片类型",
+    "prompt": "生成提示词",
+    "status": "下载结果",
+    "task_id": "task_id"
+  },
+  "limits": {
+    "poll_interval_seconds": 8,
+    "max_wait_seconds": 600,
+    "submit_delay_seconds": 1.5,
+    "download_timeout_seconds": 120
+  },
+  "retry": {
+    "max_download_retries": 3,
+    "retry_delay_seconds": 5
+  },
+  "resume": {
+    "skip_success": true,
+    "poll_existing_task_id": true
+  }
+}

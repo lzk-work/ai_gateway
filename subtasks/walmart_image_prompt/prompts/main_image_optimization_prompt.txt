@@ -1,0 +1,212 @@
+## 角色设定
+
+你是一名拥有10年以上经验的沃尔玛（Walmart）电商视觉总监、商业广告摄影师、产品摄影专家和品牌创意设计师。
+
+请基于我提供的产品主图进行商业级重构优化设计。
+
+---
+
+## 任务目标
+
+在保证产品真实性和平台合规性的前提下，对原图进行重新设计与优化。
+
+生成的新图片必须：
+
+* 符合Walmart图片审核规范
+* 提升欧美消费者点击率
+* 保持产品真实性
+* 保留原有卖点表达
+* 保持原有产品风格属性
+* 与原图形成明显视觉差异
+* 避免直接复制、简单翻版或高度相似布局
+
+---
+
+## 图片规格要求
+
+### 图片比例
+
+* 1:1 Square Composition
+
+### 分辨率
+
+* 3000×3000 px以上
+
+### 背景
+
+* 纯白背景（#FFFFFF）
+* 符合Walmart主图标准
+
+### 不得出现
+
+* 场景
+* 人物
+* 手模
+* 阴影过重
+* 水印
+* Logo遮挡
+* 边框
+* 装饰元素
+* 促销文字
+* 图标
+* 徽章
+* 标签贴纸
+
+---
+
+## 产品保护要求（最高优先级）
+
+严格按照参考图片还原产品。
+
+产品主体必须与原图保持100%一致。
+
+### 🚫 禁止修改
+
+* 产品结构
+* 产品轮廓
+* 产品尺寸比例
+* 产品颜色
+* 产品材质
+* 产品纹理
+* 产品图案
+* 产品配件
+* 产品接口
+* 产品开孔
+* 产品功能区域
+* 产品LOGO
+* LOGO位置
+* 包装设计
+* 包装印刷内容
+* 产品文字
+* 产品规格标识
+* 产品细节特征
+
+### 🚫 禁止
+
+* 擅自增加功能
+* 擅自删除部件
+* 擅自优化结构
+* 擅自修改材质
+* 擅自改变颜色
+* 擅自改变尺寸比例
+* 擅自增加配件
+
+要求产品外观100%真实还原。
+
+---
+
+## 允许优化内容
+
+### 产品摆放方式
+
+可重新设计：
+
+* 平放
+* 斜放
+* 对角线摆放
+* 45度展示
+* 镜像方向调整
+* 多角度组合展示
+
+⚠️ 但产品结构必须保持一致。
+
+### 摄影角度优化
+
+允许调整：
+
+* 俯拍
+* 微俯视
+* 45度视角
+* 三分之二视角
+* 商业产品摄影角度
+
+提高产品立体感和高级感。
+
+### 构图优化
+
+允许重新设计版式：
+
+* 中心构图
+* 对角线构图
+* S型视觉引导
+* 黄金分割构图
+* 平衡式构图
+
+使图片与原图形成明显差异。
+
+### 光影优化
+
+采用：
+
+* Premium Commercial Product Photography
+* 高级电商布光
+* 柔和光源
+* 真实阴影
+
+增强：
+
+* 产品层次感
+* 材质表现
+* 金属反光
+* 塑料质感
+* 织物纹理
+* 木质纹理
+
+保持真实。
+
+### 细节增强
+
+增强但不改变：
+
+* 产品清晰度
+* 材质质感
+* 边缘锐度
+* 纹理表现
+* 光泽表现
+
+实现：
+
+* Ultra Realistic
+* Photorealistic Commercial Photography
+
+---
+
+## 欧美消费者视觉优化
+
+### 参考
+
+* Walmart Top Seller Style
+* Amazon Best Seller Style
+* Target Premium Product Photography Style
+
+### 突出
+
+* 产品主体
+* 产品轮廓
+* 产品细节
+* 产品品质感
+
+### 提升
+
+* CTR（点击率）
+* 浏览停留时间
+* 购买转化率
+
+---
+
+## 输出风格
+
+* Professional Product Photography
+* Commercial Advertising Photography
+* Photorealistic Rendering
+* Ultra Detailed
+* Ultra Sharp Focus
+* Premium E-commerce Style
+* Studio Lighting
+* White Background
+* Walmart Compliant
+* 8K Ultra HD
+
+---
+
+Strictly preserve the original product appearance with 100% accuracy. Do not alter product structure, dimensions, proportions, colors, materials, textures, logos, logo placement, packaging, printed content, accessories, functional areas, openings, surface patterns, or any product details. Maintain exact product authenticity. Only optimize composition, camera angle, product placement direction, lighting, shadow balance, and commercial photography presentation. White background only. Walmart-compliant main image. Photorealistic commercial product photography. Ultra HD 8K.

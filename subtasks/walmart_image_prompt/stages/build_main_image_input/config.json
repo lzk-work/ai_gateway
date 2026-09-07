@@ -1,0 +1,21 @@
+{
+  "name": "build_main_image_input",
+  "description": "根据源 Excel 的 SKU 与原主图，生成主图优化入参（固定提示词模式，不调用 BUZZ）。",
+  "input": {
+    "template_path": "subtasks/walmart_image_prompt/templates/sub_image_download_template.xlsx",
+    "template_sheet_name": "Sheet1"
+  },
+  "columns": {
+    "source_sku": "SKU",
+    "source_main_image": "主图",
+    "template_sku": "SKU",
+    "template_reference_image": "参考图片链接",
+    "template_image_name": "图片命名",
+    "template_prompt": "生成提示词",
+    "template_image_type": "图片类型",
+    "template_download_result": "下载结果",
+    "template_task_id": "task_id"
+  },
+  "prompt_file": "subtasks/walmart_image_prompt/prompts/main_image_optimization_prompt.txt",
+  "image_type": "Main Image"
+}

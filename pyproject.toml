@@ -1,4 +1,4 @@
-﻿[project]
+[project]
 name = "ai-gateway"
 version = "0.1.0"
 description = "Multi-gateway AI API calling framework"
