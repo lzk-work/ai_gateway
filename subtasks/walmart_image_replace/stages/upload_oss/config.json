@@ -1,0 +1,42 @@
+{
+  "name": "walmart_replace_upload_oss",
+  "description": "业务任务 walmart_image_replace 的第四阶段：复用 ai_gateway.subtasks.oss_upload_images 把生成的图片上传到阿里云 OSS（行级 checkpoint、幂等续跑、并发上传）。",
+  "execution": {
+    "type": "oss_upload",
+    "provider": "aliyun_oss"
+  },
+  "input": {
+    "image_result_excel_path": "",
+    "sheet_name": "Sheet1",
+    "download_dir": "",
+    "image_results_path": "",
+    "comment": "image_results_path = 阶段03的 image_generation_results.jsonl（行级）；批次路径由 workflow_common.apply_batch_to_oss_config 注入。"
+  },
+  "output": {
+    "excel_path": "",
+    "results_path": "",
+    "checkpoint_path": "",
+    "comment": "均为 batches/<batch>/04_upload_oss/ 下的行级产物。"
+  },
+  "oss": {
+    "prefix": "",
+    "key_template": "{sku}/{image_name}.png",
+    "url_template": null,
+    "overwrite": true,
+    "comment": "{sku} = OSS路径/开发SKU（如 develop/DEV_A001，图片流水线主键），渲染出的对象路径 {OSS路径}/{开发SKU}/{image_name}.png 与已有新附图同目录；{image_name} 为不含扩展名的文件名（共享模块传 stem），模板需自带 .png。prefix 留空：目录结构完全由 {sku} 决定。"
+  },
+  "columns": {
+    "sku": "SKU",
+    "image_name": "图片命名",
+    "download_status": "下载结果",
+    "task_id": "task_id"
+  },
+  "limits": {
+    "max_workers": 10,
+    "batch_size": 500
+  },
+  "resume": {
+    "skip_success": true,
+    "comment": "OSS 上传按 object key 幂等，同 key 覆盖无害。"
+  }
+}

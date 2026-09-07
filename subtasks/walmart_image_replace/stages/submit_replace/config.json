@@ -1,0 +1,30 @@
+{
+  "name": "walmart_replace_submit_replace",
+  "description": "业务任务 walmart_image_replace 的第六阶段：把 05 组装好的完整图片集按店铺打包成 MPItemFeed XML，调用沃尔玛 /v3/feeds?feedType=item 真实提交，行级 checkpoint 记录 feedId，支持幂等续跑。",
+  "execution": {
+    "type": "walmart_feed",
+    "gateway": "walmart_marketplace",
+    "endpoints": {
+      "token": "/v3/token",
+      "submit_feed": "/v3/feeds?feedType=item"
+    },
+    "comment": "鉴权走 config.json walmart_api：client_id/client_secret 换 access_token，请求头带 WM_SEC.ACCESS_TOKEN + Authorization: Basic。凭证从 configs/local.env 注入。"
+  },
+  "input": {
+    "payload_path": "batches/<batch>/05_build_replace_result/replace_payload.jsonl",
+    "comment": "仅提交 complete=True 且店铺在 walmart_api.stores 配置内的 SKU；不完整 SKU 跳过（沃尔玛图片属性为全量替换，提交不完整集合会丢图）。"
+  },
+  "output": {
+    "results_path": "batches/<batch>/06_submit_replace/submit_results.jsonl",
+    "fields": ["store", "sku", "gtin", "feed_id", "status", "error", "submitted_at"]
+  },
+  "feed": {
+    "xml_root": "MPItemFeed",
+    "attribute": "AdditionalProductAttributes/ImageUrls",
+    "comment": "每 SKU 一个 <MPItem>：MainImageUrl=主图，AlternateImageUrl sequence=1..n=顺序副图。"
+  },
+  "resume": {
+    "skip_success": true,
+    "comment": "checkpoint 键为 (store, sku)；status ∈ submitted/success/processed 跳过重提，error 行重跑时重新提交。"
+  }
+}

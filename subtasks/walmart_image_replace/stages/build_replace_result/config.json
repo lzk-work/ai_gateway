@@ -1,0 +1,28 @@
+{
+  "name": "walmart_replace_build_replace_result",
+  "description": "业务任务 walmart_image_replace 的第五阶段：合并已有图与新图，组装最终替换 payload（主图独立、副图有序）。",
+  "execution": {
+    "type": "local_transform",
+    "gateway": null,
+    "model": null
+  },
+  "input": {
+    "inventory_path": "batches/<batch>/01_query_existing_images/image_inventory.jsonl",
+    "oss_results_path": "batches/<batch>/04_upload_oss/oss_upload_results.jsonl"
+  },
+  "output": {
+    "payload_path": "batches/<batch>/05_build_replace_result/replace_payload.jsonl"
+  },
+  "assembly": {
+    "main_image_source": "input_column",
+    "comment": "主图取自入参「主图链接」列，独立为 mainImageUrl，不进副图数组；副图 = 已有位置(阶段01) + 新上传位置(阶段04)按 1..target_upload 有序合并。"
+  },
+  "validation": {
+    "require_missing_positions_empty": true,
+    "comment": "缺失位置数 = 0 才标记 complete=true；06 只提交 complete 的 SKU。"
+  },
+  "resume": {
+    "skip_success": false,
+    "comment": "纯组装无副作用，重跑覆盖写。"
+  }
+}

@@ -1,0 +1,50 @@
+{
+  "name": "walmart_replace_generate_prompts",
+  "description": "业务任务 walmart_image_replace 的第二阶段：按缺失位置真实调 BUZZ 生成副图提示词（OpenAI 兼容接口，复用 prompts/walmart_image_replace_template.txt 模板）。",
+  "execution": {
+    "type": "model_call",
+    "gateway": {
+      "name": "buzz",
+      "base_url": "https://buzzai.cc",
+      "api_key_env": "BUZZ_API_KEY",
+      "endpoint": "/v1/chat/completions"
+    },
+    "model": {
+      "name": "gpt-5.4",
+      "candidates": ["gpt-5.4-mini", "gpt-5.6-terra", "gpt-5.5"],
+      "provider": "openai",
+      "api_style": "chat_completions",
+      "stream": true,
+      "max_tokens": 12000,
+      "temperature": 0.2,
+      "image_detail": "auto"
+    }
+  },
+  "input": {
+    "inventory_path": "batches/<batch>/01_query_existing_images/image_inventory.jsonl"
+  },
+  "output": {
+    "model_results_path": "batches/<batch>/02_generate_prompts/model_results.jsonl",
+    "full_outputs_dir": "batches/<batch>/02_generate_prompts/full_outputs",
+    "comment": "输出与 walmart_image_prompt 的 02 同构（model_results.jsonl + full_outputs/<sku>.json），供共享模块 mxapi_generate_images.load_prompt_map 直接消费；sku = OSS路径（按目录去重），image_number = 缺失位置。"
+  },
+  "prompt_template_path": "prompts/walmart_image_replace_template.txt",
+  "prompt_placeholders": {
+    "产品标题": "title",
+    "产品五点": "bullets"
+  },
+  "prompt_inputs": {
+    "comment": "多模态提示词入参 = 主图链接(显式) + 阶段01查得的已有副图 + 标题 + 五点（单单元格），与 walmart_image_prompt 的提示词方式一致。"
+  },
+  "validation": {
+    "require_prompt_count_matches_to_generate": true
+  },
+  "retry": {
+    "max_retries": 2,
+    "retry_delay_seconds": 30,
+    "retryable_http_status": [429, 500, 502, 503, 504, 525]
+  },
+  "resume": {
+    "skip_success": true
+  }
+}

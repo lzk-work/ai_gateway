@@ -2,7 +2,7 @@
   "name": "build_sub_image_download_input",
   "description": "根据已成功生成图片方案的 SKU，生成副图下载/上传入参模板。",
   "input": {
-    "template_path": "E:/WorkSpace/ai_gateway/subtasks/walmart_image_prompt/templates/sub_image_download_template.xlsx",
+    "template_path": "subtasks/walmart_image_prompt/templates/sub_image_download_template.xlsx",
     "template_sheet_name": "Sheet1"
   },
   "columns": {

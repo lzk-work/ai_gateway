@@ -1,6 +1,7 @@
 configs/local.env
 logs/
 data/
+subtasks/*/input/
 subtasks/*/stages/*/output/
 subtasks/*/batches/
 __pycache__/

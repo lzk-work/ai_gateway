@@ -1,0 +1,60 @@
+{
+  "name": "walmart_replace_generate_images",
+  "description": "业务任务 walmart_image_replace 的第三阶段：复用 ai_gateway.subtasks.mxapi_generate_images 调 MXAPI 生成图片并下载。图片行数由阶段 01 的缺失位置动态决定（不固定 image_count）。",
+  "execution": {
+    "type": "image_generation",
+    "gateway": {
+      "name": "mxapi",
+      "endpoint_submit": "/api/v2/gpt-image-2",
+      "endpoint_query": "/api/v2/gpt-image/task"
+    },
+    "model": {
+      "name": "gpt-image-2",
+      "aspect_ratio": "1:1",
+      "quality": "low",
+      "resolution": "1K"
+    }
+  },
+  "input": {
+    "excel_path": "",
+    "sheet_name": "Sheet1",
+    "model_results_path": "",
+    "comment": "excel_path = batches/<batch>/03_generate_images/image_input.xlsx（由 scripts/build_image_input.py 动态生成，SKU列=OSS路径/开发SKU）；model_results_path = 阶段02的 model_results.jsonl。批次路径由 workflow_common.apply_batch_to_image_config 注入。"
+  },
+  "output": {
+    "excel_path": "",
+    "results_path": "",
+    "download_dir": "",
+    "raw_responses_dir": "",
+    "checkpoint_path": "",
+    "comment": "均为 batches/<batch>/03_generate_images/ 下的行级产物，批次路径由 apply_batch_to_image_config 注入。"
+  },
+  "columns": {
+    "sku": "SKU",
+    "reference_image": "参考图片链接",
+    "image_name": "图片命名",
+    "image_type": "图片类型",
+    "status": "下载结果",
+    "task_id": "task_id"
+  },
+  "naming": {
+    "image_name_template": "new_sub{position}_{dev_sku}",
+    "comment": "与 OSS 已有新附图命名一致；{position} 为缺失位置，{dev_sku} 为开发SKU。不含扩展名，下载/上传阶段自动补 .png。"
+  },
+  "limits": {
+    "poll_interval_seconds": 5,
+    "max_wait_seconds": 300,
+    "submit_delay_seconds": 1.5,
+    "download_timeout_seconds": 60
+  },
+  "retry": {
+    "max_submit_retries": 3,
+    "max_download_retries": 2,
+    "retry_delay_seconds": 5
+  },
+  "resume": {
+    "skip_success": true,
+    "poll_existing_task_id": true,
+    "comment": "行级 checkpoint（sku::image_name），断点续跑与 walmart_image_prompt 完全一致。"
+  }
+}

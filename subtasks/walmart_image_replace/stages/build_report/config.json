@@ -1,0 +1,44 @@
+{
+  "name": "walmart_replace_build_report",
+  "description": "业务任务 walmart_image_replace 的第八阶段：由中间 jsonl 派生「本次上传结果报告」，每次重跑覆盖重新生成。",
+  "execution": {
+    "type": "local_transform",
+    "gateway": null,
+    "model": null
+  },
+  "input": {
+    "payload_path": "batches/<batch>/05_build_replace_result/replace_payload.jsonl",
+    "oss_results_path": "batches/<batch>/04_upload_oss/oss_upload_results.jsonl"
+  },
+  "output": {
+    "report_path": "batches/<batch>/08_build_report/result_report.jsonl",
+    "report_xlsx_path": "batches/<batch>/08_build_report/result_report.xlsx"
+  },
+  "columns": {
+    "store": "店铺",
+    "platform_sku": "平台SKU",
+    "gtin": "GTIN",
+    "image_links": "上传的图片链接",
+    "status": "是否成功",
+    "error_reason": "失败原因",
+    "walmart_status": "沃尔玛上架状态",
+    "walmart_error": "沃尔玛失败原因"
+  },
+  "status_priority": {
+    "comment": "是否成功 = 替换结果 complete（全部副图已生成并上传 OSS）。失败原因仅未完整时输出缺失位置。沃尔玛上架状态来自 07 对账（未运行 06/07 时为「未提交」）。",
+    "labels": {
+      "success": "成功",
+      "pending": "未完成"
+    },
+    "walmart_labels": {
+      "success": "成功",
+      "failed": "失败",
+      "in_progress": "处理中",
+      "error": "查询失败"
+    }
+  },
+  "resume": {
+    "skip_success": false,
+    "comment": "派生报告，每次重跑覆盖写，始终反映最新状态。"
+  }
+}

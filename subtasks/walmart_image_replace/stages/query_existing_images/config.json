@@ -1,0 +1,45 @@
+{
+  "name": "walmart_replace_query_existing_images",
+  "description": "业务任务 walmart_image_replace 的第一阶段：读取入参 Excel，列举 OSS 已有新附图，按命名解析位置，算出目标上传数与缺失位置。",
+  "execution": {
+    "type": "local_transform",
+    "gateway": null,
+    "model": null
+  },
+  "input": {
+    "excel_path": "subtasks/walmart_image_replace/input/sample_replace.xlsx",
+    "sheet_name": "Sheet1"
+  },
+  "output": {
+    "inventory_path": "batches/<batch>/01_query_existing_images/image_inventory.jsonl"
+  },
+  "columns": {
+    "task_id": "平台SKU",
+    "gtin": "GTIN",
+    "store": "店铺",
+    "oss_image_path": "OSS路径",
+    "dev_sku": "开发SKU",
+    "main_image": "主图链接",
+    "title": "标题",
+    "bullets": "五点"
+  },
+  "naming": {
+    "existing_name_pattern": "^new_sub(\\d+)_(?P<dev>.+?)\\.png$",
+    "comment": "已有新附图对象路径 {OSS路径}/{开发SKU}/new_sub{位置}_{开发SKU}.png，位置从 1 开始。"
+  },
+  "probe": {
+    "mode": "public_url_get_range",
+    "comment": "已有图探测：对公共读 OSS 公网 URL 发 GET + Range: bytes=0-0，逐位置探测 1..max_sub_images（位置有界，无需列举目录）。bucket/endpoint/prefix 取 configs/local.env 的 ALIYUN_OSS_*（workflow_common.oss_public_base 拼基座）。不用 HEAD（代理环境实测 HEAD 被拒）。无配置时直接报错退出，不再静默回退。",
+    "timeout_seconds": 10,
+    "concurrency": 8
+  },
+  "limits": {
+    "min_sub_images": 4,
+    "max_sub_images": 6,
+    "comment": "target_upload = min(max_sub_images, max(E, min_sub_images))，E 为已有图数；主图不计入。"
+  },
+  "resume": {
+    "skip_success": false,
+    "comment": "OSS 列举只读幂等，重跑重新列举覆盖写 inventory。"
+  }
+}

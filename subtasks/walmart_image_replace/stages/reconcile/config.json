@@ -1,0 +1,36 @@
+{
+  "name": "walmart_replace_reconcile",
+  "description": "业务任务 walmart_image_replace 的第七阶段：对账 06 提交的沃尔玛 Feed，轮询 feedStatus 至 PROCESSED 后取每 SKU 的 ingestionStatus，按 SKU 写出对账结果。",
+  "execution": {
+    "type": "walmart_feed",
+    "gateway": "walmart_marketplace",
+    "endpoints": {
+      "feed_status": "/v3/feeds/{feedId}",
+      "feed_items": "/v3/feeds/{feedId}/items"
+    }
+  },
+  "input": {
+    "submit_results_path": "batches/<batch>/06_submit_replace/submit_results.jsonl"
+  },
+  "output": {
+    "results_path": "batches/<批次>/07_reconcile/reconcile_results.jsonl",
+    "fields": ["store", "sku", "gtin", "feed_id", "feed_status", "status", "walmart_status", "errors", "reconciled_at"]
+  },
+  "status_mapping": {
+    "comment": "ingestionStatus → 本地 status；未映射的按 in_progress 处理，稍后重跑 07。",
+    "SUCCESS": "success",
+    "ACCEPTED": "success",
+    "DATA_ERROR": "failed",
+    "SYSTEM_ERROR": "failed",
+    "PARTIAL_SUCCESS": "failed"
+  },
+  "poll": {
+    "interval_seconds": 30,
+    "max_attempts": 20,
+    "comment": "与任务级 config.json feed.poll 同源；超限仍未 PROCESSED 则该 feed 下所有 SKU 标 in_progress。"
+  },
+  "resume": {
+    "skip_success": false,
+    "comment": "对账只读不写远端，每次重跑覆盖 reconcile_results.jsonl，反映最新状态。"
+  }
+}

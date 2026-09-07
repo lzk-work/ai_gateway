@@ -1,0 +1,53 @@
+{
+    "name": "walmart_image_replace",
+    "description": "沃尔玛图片替换业务任务（真实外部调用：OSS 探测已有图 / BUZZ 生成副图提示词 / MXAPI 生成图 / OSS 上传，重点验证编排与续跑闭环）。阶段参数见 stages/<stage>/config.json。",
+    "input": {
+        "excel_path": "subtasks/walmart_image_replace/input/sample_replace.xlsx",
+        "sheet_name": "Sheet1"
+    },
+    "execution": {
+        "max_records": 1000,
+        "concurrency": 5
+    },
+    "walmart_api": {
+        "default_store": "store_us",
+        "token_endpoint": "/v3/token",
+        "feed_endpoint": "/v3/feeds",
+        "token_grant_type": "client_credentials",
+        "token_cache_seconds": 900,
+        "comment": "沃尔玛 Marketplace API 鉴权：用 client_id + client_secret 换取 access_token（POST /v3/token, grant_type=client_credentials），再用 WM_SEC.ACCESS_TOKEN + Authorization: Basic 头调 Feed API。每个店铺有独立凭证，从 configs/local.env 注入。",
+        "stores": {
+            "store_rlx": {
+                "business_unit": "润林轩-沃尔玛",
+                "base_url": "https://marketplace.walmartapis.com",
+                "api_key_env": "WALMART_STORE_RLX_CLIENT_ID",
+                "secret_env": "WALMART_STORE_RLX_CLIENT_SECRET"
+            },
+            "store_nm": {
+                "business_unit": "娜美-沃尔玛",
+                "base_url": "https://marketplace.walmartapis.com",
+                "api_key_env": "WALMART_STORE_NM_CLIENT_ID",
+                "secret_env": "WALMART_STORE_NM_CLIENT_SECRET"
+            }
+        }
+    },
+    "feed": {
+        "feed_type": "item",
+        "feed_version": "1.5.0",
+        "poll": {
+            "interval_seconds": 30,
+            "max_attempts": 20,
+            "comment": "07 对账轮询 /v3/feeds/{feedId} 的频率与上限；超限仍未 PROCESSED 则标 in_progress，可重跑 07。"
+        }
+    },
+    "workflow": {
+        "query_existing_images": true,
+        "generate_prompts": true,
+        "generate_images": true,
+        "upload_oss": true,
+        "build_replace_result": true,
+        "submit_replace": true,
+        "reconcile": true,
+        "build_report": true
+    }
+}
