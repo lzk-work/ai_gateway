@@ -14,8 +14,8 @@ subtasks/walmart_image_prompt/stages/build_sub_image_download_input/config.json
 
 读取：
 
-- 源 Excel：`input.source_excel_path`
-- 模型结果：`input.model_results_path`
+- 源 Excel：业务总配置 input.excel_path。
+- 模型结果：由当前批次的 02 阶段路径派生。
 - 下载模板：`input.template_path`
 
 下载模板文件放在业务目录：

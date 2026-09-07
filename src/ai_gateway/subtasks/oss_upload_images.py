@@ -94,9 +94,9 @@ def find_project_root(path: Path) -> Path:
     raise RuntimeError(f"Cannot find project root from config path: {path}")
 
 
-def load_config(path: str | Path) -> OssUploadConfig:
+def load_config(path: str | Path, *, config_data: dict[str, Any] | None = None) -> OssUploadConfig:
     path = Path(path)
-    data = json.loads(path.read_text(encoding="utf-8-sig"))
+    data = config_data if config_data is not None else json.loads(Path(path).read_text(encoding="utf-8-sig"))
     project_root = find_project_root(path.resolve())
     oss = data.get("oss", {})
     limits = data.get("limits", {})

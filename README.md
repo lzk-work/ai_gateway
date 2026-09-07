@@ -2,7 +2,7 @@
 
 本项目用于批量调用不同中转站和模型接口，支持 Excel/数据库输入、批处理、日志记录、失败重试、JSON 结果校验和结果写回。
 
-当前已落地的业务任务是：
+当前已完善并投入使用的业务任务是：
 
 ```text
 subtasks/walmart_image_prompt/
@@ -20,8 +20,12 @@ subtasks/walmart_image_prompt/
   00_full_workflow.py
   01_generate_prompt_tasks.py
   02_call_buzz_model.py
+  03b_generate_main_images.py
   03_generate_and_download_images.py
+  05b_upload_main_oss.py
   05_upload_oss.py
+  06_build_final_image_result.py
+  07_export_review.py
   workflow_common.py
   stages/
     get_pic_prompt/
@@ -45,7 +49,7 @@ subtasks/walmart_image_prompt/
 D:\Program\Anaconda\python.exe E:\WorkSpace\ai_gateway\subtasks\walmart_image_prompt\00_full_workflow.py
 ```
 
-总流程按 `subtasks/walmart_image_prompt/config.json` 中的 `workflow` 开关决定执行哪些阶段。默认不会执行图片生成下载，避免误消耗 MXAPI 额度。
+总流程按 `subtasks/walmart_image_prompt/config.json` 中的 `workflow` 开关决定执行哪些阶段。当前配置已开启 BUZZ、主图/副图生成、主图/副图 OSS 上传及最终副图表生成；正式运行会消耗 API 额度并上传对象，建议始终先执行 `--dry-run`。
 
 分步执行：
 
@@ -53,7 +57,9 @@ D:\Program\Anaconda\python.exe E:\WorkSpace\ai_gateway\subtasks\walmart_image_pr
 D:\Program\Anaconda\python.exe E:\WorkSpace\ai_gateway\subtasks\walmart_image_prompt\01_generate_prompt_tasks.py
 D:\Program\Anaconda\python.exe E:\WorkSpace\ai_gateway\subtasks\walmart_image_prompt\02_call_buzz_model.py
 D:\Program\Anaconda\python.exe E:\WorkSpace\ai_gateway\subtasks\walmart_image_prompt\03_generate_and_download_images.py
+D:\Program\Anaconda\python.exe E:\WorkSpace\ai_gateway\subtasks\walmart_image_prompt\03b_generate_main_images.py
 D:\Program\Anaconda\python.exe E:\WorkSpace\ai_gateway\subtasks\walmart_image_prompt\05_upload_oss.py --dry-run
+D:\Program\Anaconda\python.exe E:\WorkSpace\ai_gateway\subtasks\walmart_image_prompt\05b_upload_main_oss.py --dry-run
 ```
 
 ## 配置位置
@@ -88,9 +94,12 @@ subtasks/walmart_image_prompt/batches/<入参文件名>/01_get_pic_prompt/genera
 subtasks/walmart_image_prompt/batches/<入参文件名>/02_call_buzz_model/model_results.jsonl
 subtasks/walmart_image_prompt/batches/<入参文件名>/02_call_buzz_model/full_outputs/
 subtasks/walmart_image_prompt/batches/<入参文件名>/02_call_buzz_model/walmart_results.xlsx
+subtasks/walmart_image_prompt/batches/<入参文件名>/04b_generate_main_images/downloaded_images/
 subtasks/walmart_image_prompt/batches/<入参文件名>/04_generate_images/downloaded_images/
+subtasks/walmart_image_prompt/batches/<入参文件名>/05b_upload_main_oss/oss_upload_results.jsonl
 subtasks/walmart_image_prompt/batches/<入参文件名>/05_upload_oss/oss_upload_results.jsonl
 subtasks/walmart_image_prompt/batches/<入参文件名>/05_upload_oss/walmart_sub_image_oss_result.xlsx
+subtasks/walmart_image_prompt/batches/<入参文件名>/07_review/审核预览.xlsx
 ```
 
 批次名由入参 Excel 文件名决定。重跑同一个文件会继续使用同一个批次目录；需要独立重跑一版时，先改入参文件名。

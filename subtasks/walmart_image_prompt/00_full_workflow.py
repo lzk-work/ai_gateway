@@ -1,8 +1,4 @@
-"""Full Walmart image-prompt workflow.
-
-Default behavior follows config.json workflow switches. Image generation is disabled
-by default because it consumes image-generation credits.
-"""
+"""Full Walmart image workflow controlled by ``config.json`` stage switches."""
 
 from __future__ import annotations
 
@@ -11,7 +7,7 @@ import runpy
 import sys
 from pathlib import Path
 
-from workflow_common import workflow_switches
+from workflow_common import workflow_switches, check_image_provider
 from scripts.execution_confirmation import print_execution_confirmation
 from scripts.statistics.batch_stats import print_batch_stats
 
@@ -37,6 +33,8 @@ def main() -> None:
     args = parser.parse_args()
 
     switches = workflow_switches()
+    if switches["generate_main_image"] or switches["generate_and_download_images"]:
+        check_image_provider()
     print("\n=== Walmart 图片业务总流程 ===")
     if not print_execution_confirmation(args.dry_run):
         return

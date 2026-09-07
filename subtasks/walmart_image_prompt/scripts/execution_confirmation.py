@@ -8,6 +8,10 @@ from typing import Any
 
 from workflow_common import (
     CALL_MODEL_CONFIG,
+    load_stage_config,
+    load_stage_data,
+    image_provider,
+    GENERATE_MAIN_CONFIG,
     GENERATE_IMAGES_CONFIG,
     GET_PROMPT_CONFIG,
     PROJECT_ROOT,
@@ -21,6 +25,7 @@ from workflow_common import (
 )
 
 from ai_gateway.config.loader import load_app_config, load_local_env
+from ai_gateway.retry_policy import gateway_max_attempts
 from ai_gateway.subtasks.walmart_get_pic_prompt import _is_empty_row, load_config, read_excel_rows, validate_required_columns
 
 
@@ -37,6 +42,8 @@ def print_execution_confirmation(dry_run: bool = False) -> bool:
 
     call_config = read_json(CALL_MODEL_CONFIG)
     image_config = read_json(GENERATE_IMAGES_CONFIG)
+    provider = image_provider()
+    main_image_config = read_json(GENERATE_MAIN_CONFIG)
     upload_config = read_json(UPLOAD_OSS_CONFIG)
     app_config = load_app_config(PROJECT_ROOT / "configs" / "gateways.yaml", PROJECT_ROOT / "configs" / "models.yaml")
     local_env = load_local_env(PROJECT_ROOT / "configs" / "local.env")
@@ -50,12 +57,15 @@ def print_execution_confirmation(dry_run: bool = False) -> bool:
     print(f"Sheet: {sheet_name}")
     print(f"Excel有效任务数: {task_count}")
     print(f"业务 max_records: {execution.get('max_records')}")
+    print(f"统一生图平台: {provider}（主图/副图共用，不自动切换）")
     print(
         "阶段开关: "
         f"01={switches['generate_prompt_tasks']} | "
         f"02={switches['call_buzz_model']} | "
-        f"03={switches['generate_and_download_images']} | "
-        f"05={switches['upload_oss']} | "
+        f"03b主图={switches['generate_main_image']} | "
+        f"03副图={switches['generate_and_download_images']} | "
+        f"05b主图OSS={switches['upload_main_image']} | "
+        f"05副图OSS={switches['upload_oss']} | "
         f"06={switches['build_final_result']}"
     )
 
@@ -73,7 +83,7 @@ def print_execution_confirmation(dry_run: bool = False) -> bool:
     if gateway_config:
         print(f"API: {gateway_config.base_url}{gateway.get('endpoint', '/v1/chat/completions')}")
         print(f"Key环境变量: {gateway_config.api_key_env}")
-        print(f"超时/重试: {gateway_config.timeout_seconds}s / {gateway_config.max_retries}")
+        print(f"HTTP超时: {gateway_config.timeout_seconds}s | 失败重试: {gateway_max_attempts(gateway_config) - 1} 次（含首次最多 {gateway_max_attempts(gateway_config)} 次）")
     print(f"模型: {model.get('name')}")
     print(f"候选模型: {', '.join(model.get('candidates', [])) or '无'}")
     print(f"stream: {model.get('stream')} | max_tokens: {model.get('max_tokens')} | temperature: {model.get('temperature')}")
@@ -81,7 +91,21 @@ def print_execution_confirmation(dry_run: bool = False) -> bool:
     print(f"结果日志: {paths['model_results']}")
     print(f"完整输出: {paths['full_outputs']}")
 
-    print("\n--- 03 MXAPI 生成并下载图片 ---")
+    print(f"\n--- 03b {provider.upper()} 生成并下载主图 ---")
+    print_stage_state(switches["generate_main_image"])
+    main_model = main_image_config.get("execution", {}).get("model", {})
+    print(
+        "模型参数: "
+        f"{main_model.get('name')} | "
+        f"aspect_ratio={main_model.get('aspect_ratio')} | "
+        f"quality={main_model.get('quality')} | "
+        f"resolution={main_model.get('resolution')} | "
+        f"size={main_model.get('size') or ('按比例映射' if provider == 'tuzi' else '不适用')}"
+    )
+    print(f"主图下载目录: {paths['main_download_dir']}")
+    print(f"主图结果: {paths['main_image_excel']}")
+
+    print(f"\n--- 03 {provider.upper()} 生成并下载副图 ---")
     print_stage_state(switches["generate_and_download_images"])
     image_gateway = image_config.get("execution", {}).get("gateway", {})
     image_model = image_config.get("execution", {}).get("model", {})
@@ -92,19 +116,26 @@ def print_execution_confirmation(dry_run: bool = False) -> bool:
         print(f"提交API: {image_gateway_config.base_url}{image_gateway.get('endpoint_submit')}")
         print(f"查询API: {image_gateway_config.base_url}{image_gateway.get('endpoint_query')}")
         print(f"Key环境变量: {image_gateway_config.api_key_env}")
-        print(f"超时/重试: {image_gateway_config.timeout_seconds}s / {image_gateway_config.max_retries}")
+        print(f"HTTP超时: {image_gateway_config.timeout_seconds}s")
+    attempts = gateway_max_attempts(app_config.gateways[image_gateway_name])
+    print(f"提交失败重试: {max(0, attempts - 1)} 次（含首次最多 {attempts} 次；无任务ID重试可能重复扣费）")
     print(
         "模型参数: "
         f"{image_model.get('name')} | "
         f"aspect_ratio={image_model.get('aspect_ratio')} | "
         f"quality={image_model.get('quality')} | "
-        f"resolution={image_model.get('resolution')}"
+        f"resolution={image_model.get('resolution')} | "
+        f"size={image_model.get('size') or ('按比例映射' if provider == 'tuzi' else '不适用')}"
     )
     print(f"图片并发: {execution.get('image_concurrency', execution.get('concurrency', 1))}")
     print(f"下载目录: {paths['download_dir']}")
     print(f"图片结果: {paths['image_excel']}")
 
-    print("\n--- 05 上传 OSS ---")
+    print("\n--- 05b 上传主图 OSS ---")
+    print_stage_state(switches["upload_main_image"])
+    print(f"主图上传结果: {paths['main_oss_excel']}")
+
+    print("\n--- 05 上传副图 OSS ---")
     print_stage_state(switches["upload_oss"])
     # 业务总配置 config.json 的 oss 块优先，未配置时回退到阶段配置默认值。
     oss = {**upload_config.get("oss", {}), **load_task_config().get("oss", {})}
@@ -141,7 +172,7 @@ def print_stage_state(enabled: bool) -> None:
 
 
 def count_input_rows() -> int:
-    config = load_config(GET_PROMPT_CONFIG)
+    config = load_stage_config(GET_PROMPT_CONFIG, load_config)
     from workflow_common import apply_batch_to_prompt_config
 
     config = apply_batch_to_prompt_config(config)
@@ -152,4 +183,4 @@ def count_input_rows() -> int:
 
 
 def read_json(path: str | Path) -> dict[str, Any]:
-    return json.loads(Path(path).read_text(encoding="utf-8-sig"))
+    return load_stage_data(path)

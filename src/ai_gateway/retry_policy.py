@@ -28,6 +28,14 @@ NON_RETRYABLE_ERROR_KEYWORDS = (
 )
 
 
+def gateway_max_attempts(gateway) -> int:
+    """Single contract: max_retries is additional retries, excluding the first call."""
+    retries = gateway.max_retries
+    if isinstance(retries, bool) or not isinstance(retries, int) or retries < 0:
+        raise ValueError(f"{gateway.name}.max_retries must be a non-negative integer")
+    return retries + 1
+
+
 def is_retryable_error(error_code: str | None, error_message: str | None) -> bool:
     text = f"{error_code or ''} {error_message or ''}"
     if any(keyword in text for keyword in NON_RETRYABLE_ERROR_KEYWORDS):

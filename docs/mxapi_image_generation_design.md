@@ -1,171 +1,89 @@
-﻿# MXAPI gpt-image-2 图片生成接入设计
+# MXAPI 图片生成实现说明
 
-## 可行性结论
+当前 `walmart_image_prompt` 已使用 MXAPI `gpt-image-2` 同时生成主图和副图。
 
-可行。MXAPI `gpt-image-2` 是异步图片生成接口，流程与当前系统的阶段化批处理模型匹配：
-
-1. 提交生成任务。
-2. 获取 `task_id`。
-3. 轮询任务状态。
-4. 任务完成后读取图片 URL。
-5. 下载图片并写回结果。
-
-官方文档：
-
-- API 指南：https://open.mxapi.org/api-guide
-- gpt-image-2 调试页：https://open.mxapi.org/api-test?id=v2-gpt-image-2
-
-## 官方接口要点
-
-提交接口：
+## 接口
 
 ```text
 POST https://open.mxapi.org/api/v2/gpt-image-2
+GET  https://open.mxapi.org/api/v2/gpt-image/task?task_id=<task_id>
 Authorization: Bearer <MXAPI_API_KEY>
-Content-Type: application/json
 ```
 
-核心入参：
+当前阶段参数：
 
 ```json
 {
-  "prompt": "图片生成提示词",
+  "model": "gpt-image-2",
   "aspect_ratio": "1:1",
   "quality": "low",
-  "resolution": "1K",
-  "reference_images": ["参考图片URL"]
+  "resolution": "1K"
 }
 ```
 
-查询接口：
+接口地址和模型参数分别来自 `configs/gateways.yaml` 与两个生成阶段的 `config.json`，不在 Python 代码中硬编码密钥。
+
+## 两条生成支路
+
+### 主图
+
+`03b_generate_main_images.py` 先读取源 Excel 的 SKU 和原主图，通过 `scripts/build_main_image_input.py` 生成一行一个 SKU 的入参。提示词来自 `prompts/main_image_optimization_prompt.txt`，阶段使用 `prompt_mode=fixed`，不依赖 BUZZ 的 `image_plan`。
+
+批次产物位于：
 
 ```text
-GET https://open.mxapi.org/api/v2/gpt-image/task?task_id=<task_id>
-Authorization: Bearer <MXAPI_API_KEY>
+03b_build_main_image_input/
+04b_generate_main_images/
 ```
 
-完成后优先读取：
+### 副图
+
+`03_generate_and_download_images.py` 先从 BUZZ 校验通过的 `image_plan` 构造每 SKU 6 行入参，再按 `sub1` 至 `sub6` 匹配对应提示词并调用 MXAPI。
+
+当根配置开启 `workflow.generate_main_image` 时，副图阶段要求同一 SKU 在主图结果中已成功；否则对应副图行标记为 `blocked`，不提交 MXAPI。
+
+批次产物位于：
 
 ```text
-source_images
-proxy_images
-images
+03_build_image_input/
+04_generate_images/
 ```
 
-## 当前系统接入方式
+## 异步调用与 checkpoint
 
-新增全局网关：
+共享实现：`src/ai_gateway/subtasks/mxapi_generate_images.py`。
 
-```text
-configs/gateways.yaml -> mxapi
-```
+处理过程：
 
-使用环境变量：
+1. 提交任务并取得 `task_id`。
+2. 立即写入 checkpoint，状态为 `submitted`。
+3. 轮询已有任务直至成功、永久失败或本次超时。
+4. 成功后下载图片，保存原始响应并写结果。
 
-```text
-MXAPI_API_KEY
-```
-
-不要在代码里硬编码密钥。
-
-新增业务阶段：
-
-```text
-subtasks/walmart_image_prompt/stages/generate_sub_images/
-```
-
-新增阶段实现：
-
-```text
-src/ai_gateway/subtasks/mxapi_generate_images.py
-```
-
-新增业务入口脚本：
-
-```text
-subtasks/walmart_image_prompt/03_generate_and_download_images.py
-```
-
-## 数据来源
-
-输入 Excel：
-
-```text
-stages/build_sub_image_download_input/output/walmart_sub_image_input_result.xlsx
-```
-
-Prompt 来源：
-
-```text
-stages/call_prompt_model/output/model_results.jsonl
-stages/call_prompt_model/output/full_outputs/
-```
-
-系统会根据：
-
-- SKU
-- 图片命名里的 `sub1` 到 `sub6`
-
-自动匹配对应 `image_plan` 中的图片生成提示词。
-
-## 输出
-
-结果 Excel：
-
-```text
-stages/generate_sub_images/output/walmart_sub_image_generation_result.xlsx
-```
-
-轻量结果日志：
-
-```text
-stages/generate_sub_images/output/image_generation_results.jsonl
-```
-
-下载图片目录：
-
-```text
-stages/generate_sub_images/output/downloaded_images/
-```
-
-原始查询响应：
-
-```text
-stages/generate_sub_images/output/raw_responses/
-```
-
-## 批量与断点续跑
-
-- 成功记录会跳过。
-- 失败记录会重试。
-- 如果 Excel 中已有 `task_id`，会优先继续轮询已有任务。
-- 图片生成并发由业务总配置 `image_concurrency` 控制。
-- 写 Excel 和 JSONL 在主线程统一完成，避免并发写乱。
-
-## 运行命令
-
-```powershell
-D:\Program\Anaconda\python.exe E:\WorkSpace\ai_gateway\subtasks\walmart_image_prompt\03_generate_and_download_images.py
-```
-
-## 实时 Checkpoint 与断点续跑
-
-图片生成阶段已加入实时 checkpoint：
-
-```text
-stages/generate_sub_images/output/image_generation_checkpoint.jsonl
-```
-
-关键节点会立即落盘：
-
-- 提交成功拿到 `task_id`：立即写入 `status=submitted`。
-- 轮询完成并下载成功：更新为 `status=success`。
-- 失败：写入 `status=failed` 和错误摘要。
-
-这样即使手动中断，已经提交到 MXAPI 的 `task_id` 也不会丢。下次运行会读取 checkpoint：
+续跑规则：
 
 - `success` 跳过。
-- `submitted` 或带 `task_id` 的失败记录会继续轮询。
-- 没有 `task_id` 的失败记录会重新提交。
+- `submitted` 或带 `task_id` 的非永久失败继续轮询原任务。
+- 轮询超时保留原 `task_id`，下次继续。
+- 确认任务永久失败后允许重新提交。
+- 没有 `task_id` 的失败记录重新提交。
 
-Excel 仍然最后统一写回，避免并发频繁打开 Excel 导致锁文件或写乱。
+主图和副图使用独立 checkpoint、结果日志、下载目录和原始响应目录。Excel 和最终结果 JSONL 由主线程合并写入，实时恢复依据是 checkpoint。
+
+## 并发与数量口径
+
+- 并发来自根配置 `execution.image_concurrency`。
+- `execution.max_records` 按 SKU 控制。
+- 每个 SKU 当前最多展开 1 个主图任务和 6 个副图任务。
+- 图片任务的完成顺序可能与 Excel 顺序不同，合并结果按源任务关系处理。
+
+## 验证
+
+不调用接口的检查命令：
+
+```powershell
+python subtasks/walmart_image_prompt/03b_generate_main_images.py --dry-run
+python subtasks/walmart_image_prompt/03_generate_and_download_images.py --dry-run
+```
+
+dry-run 会读取现有入参和 checkpoint，打印任务总量、成功跳过量、blocked 数量及本次待处理量，不生成模板、不提交任务、不下载图片。

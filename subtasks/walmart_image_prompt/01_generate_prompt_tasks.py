@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+from workflow_common import load_stage_config
 from pathlib import Path
 
 from workflow_common import GET_PROMPT_CONFIG, apply_batch_to_prompt_config, print_batch_info
@@ -10,6 +11,7 @@ from workflow_common import GET_PROMPT_CONFIG, apply_batch_to_prompt_config, pri
 from ai_gateway.subtasks.template_renderer import render_template
 from ai_gateway.subtasks.walmart_get_pic_prompt import (
     _is_empty_row,
+    collect_reference_images,
     load_config,
     precheck_task,
     read_excel_rows,
@@ -24,8 +26,9 @@ def main() -> None:
     args = parser.parse_args()
 
     print("\n=== 01 生成提示词任务 ===")
-    config = apply_batch_to_prompt_config(load_config(GET_PROMPT_CONFIG))
+    config = apply_batch_to_prompt_config(load_stage_config(GET_PROMPT_CONFIG, load_config))
     print_batch_info()
+    print(f"副图参考数量(buzz_sub_image_count): {config.sub_image_count}")
     if args.dry_run:
         preview(config)
         return
@@ -48,7 +51,12 @@ def preview(config) -> None:
     samples = []
     for row_number, row in rows:
         rendered, _ = render_template(template, row, placeholder_mapping=config.placeholder_mapping)
-        image_urls = [str(row.get(column)).strip() for column in config.image_columns if row.get(column)]
+        image_urls = collect_reference_images(
+            row,
+            config.image_columns,
+            config.sub_reference_columns,
+            config.sub_image_count,
+        )
         status, _, _ = precheck_task(rendered, image_urls, config.limits)
         if status == "passed":
             passed += 1
@@ -62,6 +70,7 @@ def preview(config) -> None:
     print(f"Excel: {config.input_excel}")
     print(f"Sheet: {config.sheet_name or 'active'}")
     print(f"有效数据行: {len(rows)} | 预检通过: {passed} | 预检失败: {failed}")
+    print(f"副图参考数量(buzz_sub_image_count): {config.sub_image_count}")
     print(f"输出位置: {config.output_path}")
     if samples:
         print("样例:")

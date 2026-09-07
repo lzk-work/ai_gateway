@@ -17,7 +17,9 @@ from typing import Any
 from openpyxl import load_workbook
 
 from ai_gateway.clients.mxapi_image_client import MxapiImageClient
+from ai_gateway.clients.image_providers import MxapiImageAdapter, SubmissionUnknown, create_image_adapter
 from ai_gateway.config.loader import load_app_config
+from ai_gateway.retry_policy import gateway_max_attempts
 from ai_gateway.validators.result_validator import extract_json
 
 
@@ -50,7 +52,7 @@ class MxapiGenerateImagesConfig:
     max_wait_seconds: int = 300
     submit_delay_seconds: float = 1.5
     download_timeout_seconds: int = 60
-    max_submit_retries: int = 3
+    max_permanent_retries: int = 3
     max_download_retries: int = 2
     retry_delay_seconds: int = 5
     skip_success: bool = True
@@ -58,6 +60,8 @@ class MxapiGenerateImagesConfig:
     image_type_order: list[str] = field(default_factory=list)
     desired_count: int | None = None
     require_success_results_path: str | None = None
+    provider: str = "mxapi"
+    size: str | None = None
 
 
 @dataclass(slots=True)
@@ -78,7 +82,9 @@ class ImageGenerationRecord:
     submit_latency_ms: int | None
     poll_count: int
     total_wait_seconds: int | None
-    created_at: str
+    attempts: int = 0
+    created_at: str = ""
+    provider: str = "mxapi"
 
 
 def find_project_root(path: Path) -> Path:
@@ -88,9 +94,9 @@ def find_project_root(path: Path) -> Path:
     raise RuntimeError(f"Cannot find project root from config path: {path}")
 
 
-def load_config(path: str | Path) -> MxapiGenerateImagesConfig:
+def load_config(path: str | Path, *, config_data: dict[str, Any] | None = None) -> MxapiGenerateImagesConfig:
     path = Path(path)
-    data = json.loads(path.read_text(encoding="utf-8-sig"))
+    data = config_data if config_data is not None else json.loads(Path(path).read_text(encoding="utf-8-sig"))
     project_root = find_project_root(path.resolve())
     execution = data["execution"]
     gateway = execution["gateway"]
@@ -109,6 +115,7 @@ def load_config(path: str | Path) -> MxapiGenerateImagesConfig:
         aspect_ratio=model.get("aspect_ratio", "1:1"),
         quality=model.get("quality", "low"),
         resolution=model.get("resolution", "1K"),
+        size=model.get("size"),
         input_excel_path=data["input"]["excel_path"],
         input_sheet_name=data["input"].get("sheet_name", "Sheet1"),
         model_results_path=data["input"]["model_results_path"],
@@ -122,7 +129,7 @@ def load_config(path: str | Path) -> MxapiGenerateImagesConfig:
         max_wait_seconds=int(limits.get("max_wait_seconds", 300)),
         submit_delay_seconds=float(limits.get("submit_delay_seconds", 1.5)),
         download_timeout_seconds=int(limits.get("download_timeout_seconds", 60)),
-        max_submit_retries=int(retry.get("max_submit_retries", 3)),
+        max_permanent_retries=int(retry.get("max_permanent_retries", 3)),
         max_download_retries=int(retry.get("max_download_retries", 2)),
         retry_delay_seconds=int(retry.get("retry_delay_seconds", 5)),
         skip_success=bool(resume.get("skip_success", True)),
@@ -151,9 +158,14 @@ def load_config(path: str | Path) -> MxapiGenerateImagesConfig:
 
 
 
+class CheckpointWriteError(RuntimeError):
+    pass
+
+
 class CheckpointStore:
-    def __init__(self, path: str | Path) -> None:
+    def __init__(self, path: str | Path, provider: str | None = None) -> None:
         self.path = Path(path)
+        self.provider = provider
         self.lock = threading.Lock()
         self.records: dict[str, dict[str, Any]] = {}
         for row in read_jsonl_if_exists(self.path):
@@ -167,18 +179,22 @@ class CheckpointStore:
 
     def upsert(self, record: ImageGenerationRecord) -> None:
         with self.lock:
+            if self.provider:
+                record.provider = self.provider
             row = asdict(record)
-            self.records[record_key(row)] = row
             self.append_locked(row)
+            self.records[record_key(row)] = row
 
     def append_locked(self, row: dict[str, Any]) -> None:
         """追加写一行（取代全量重写 + os.replace）：锁窗口从“重写整文件”缩到“追加一行”，
-        缓解外部进程锁导致的 PermissionError WinError5。写失败仅告警，不崩整个进程。"""
+        MXAPI 保留写失败告警行为；兔子写失败必须停止，避免重复提交付费任务。"""
         try:
             self.path.parent.mkdir(parents=True, exist_ok=True)
             with self.path.open("a", encoding="utf-8") as handle:
                 handle.write(json.dumps(row, ensure_ascii=False) + "\n")
         except OSError as exc:
+            if self.provider == "tuzi":
+                raise CheckpointWriteError("Checkpoint write failed; stop to avoid duplicate submissions") from exc
             print(f"[checkpoint] 写入失败(不中断): {exc}", flush=True)
 
 
@@ -218,12 +234,18 @@ class RowProgress:
 def run(config: MxapiGenerateImagesConfig) -> list[ImageGenerationRecord]:
     app_config = load_app_config(config.gateways_path, config.models_path)
     gateway_config = app_config.gateways[config.gateway]
-    client = MxapiImageClient(gateway_config, config.submit_endpoint, config.query_endpoint)
+    client = create_image_adapter(config.provider, gateway_config, config.submit_endpoint, config.query_endpoint)
+    if config.provider == "tuzi":
+        gateway_config.api_key()  # Fail before recording submission intent if credentials are absent.
 
     prompt_map = load_prompt_map(config.model_results_path)
     rows, workbook, sheet, headers = load_work_rows(config)
-    checkpoint_store = CheckpointStore(config.checkpoint_path)
+    checkpoint_store = CheckpointStore(config.checkpoint_path, config.provider)
     existing_records = checkpoint_store.rows()
+    if any((r.get("provider") or "mxapi") != config.provider for r in existing_records):
+        raise RuntimeError("Checkpoint platform mismatch: use a new batch when switching image provider")
+    if any(r.get("status") == "submission_unknown" for r in existing_records):
+        print("警告: 存在未取得任务ID的历史提交，将按提交上限重试，可能重复生成或扣费。", flush=True)
     rows = apply_checkpoint_to_rows(rows, existing_records)
     completed = completed_keys(existing_records) if config.skip_success else set()
     pending_rows = [row for row in rows if row_key(row) not in completed]
@@ -256,7 +278,7 @@ def run(config: MxapiGenerateImagesConfig) -> list[ImageGenerationRecord]:
     elif require_path:
         print(f"依赖主图成功: 主图结果文件不存在({require_path})，不施加依赖跳过", flush=True)
 
-    print("\n=== MXAPI 图片生成阶段 ===", flush=True)
+    print(f"\n=== {config.provider.upper()} 图片生成阶段 ===", flush=True)
     print(
         f"图片任务总数: {len(rows)} 行 / {count_skus(rows)} 个 SKU | "
         f"已成功跳过: {len(rows) - len(pending_rows) - len(blocked_records)} 行 | "
@@ -414,6 +436,8 @@ def apply_checkpoint_to_rows(rows: list[dict[str, Any]], checkpoint_rows: list[d
                 merged["task_id"] = str(saved["task_id"])
             if saved.get("status"):
                 merged["status"] = str(saved["status"])
+            if saved.get("attempts") is not None:
+                merged["attempts"] = int(saved["attempts"])
         enriched.append(merged)
     return enriched
 
@@ -514,11 +538,18 @@ def process_rows(
                 progress.advance(rec.status, sku)
                 continue
             if row.get("status") == "failed_permanent":
-                # 跨重启：该类型已确认永久失败，不再重新提交；后续行（后位类型）继续补位
-                rec = build_permanent_record(row, "已被安全策略拦截，永久放弃")
-                records.append(rec)
-                progress.advance(rec.status, sku)
-                continue
+                # 续跑命中永久失败：未达重试上限则当作普通失败重新提交（避免 AI 幻觉误判直接放弃）；
+                # 达到 max_permanent_retries 才真正放弃，后续行（后位类型）继续补位。
+                prev_attempts = int(row.get("attempts", 0) or 0)
+                if prev_attempts >= config.max_permanent_retries:
+                    rec = build_permanent_record(row, "已被安全策略拦截，已达重试上限，永久放弃", attempts=prev_attempts)
+                    records.append(rec)
+                    progress.advance(rec.status, sku)
+                    continue
+                print(
+                    f"[{position}/{len(sku_rows)}] 永久失败重试({prev_attempts}/{config.max_permanent_retries}) | SKU={sku} | 类型={row.get('image_type') or '-'}",
+                    flush=True,
+                )
             rec = process_one(position, len(sku_rows), row, prompt_map, config, client, checkpoint_store)
             records.append(rec)
             progress.advance(rec.status, sku)
@@ -579,11 +610,14 @@ def process_one(
                 poll_result, poll_count, wait_seconds = poll_until_done(client, task_id, config)
             except TaskFailedError as exc:
                 if is_permanent_failure(str(exc)):
-                    # 永久失败（内容安全拦截）：不重新提交，标记 failed_permanent，后续行（后位类型）自然补位
-                    record = build_permanent_record(row, str(exc), task_id=task_id)
+                    # 永久失败（内容安全拦截）：允许最多重试 max_permanent_retries 次，避免 AI 幻觉误判直接放弃
+                    prev_attempts = int(row.get("attempts", 0) or 0)
+                    record = build_permanent_record(
+                        row, str(exc), task_id=task_id, attempts=prev_attempts + 1
+                    )
                     checkpoint_store.upsert(record)
                     print(
-                        f"[{index}/{total}] 永久失败(安全策略) | SKU={sku} | 类型={row.get('image_type') or '-'} | 错误={short_error(str(exc))}",
+                        f"[{index}/{total}] 永久失败(安全策略) 第{prev_attempts + 1}次 | SKU={sku} | 类型={row.get('image_type') or '-'} | 错误={short_error(str(exc))}",
                         flush=True,
                     )
                     return record
@@ -592,16 +626,16 @@ def process_one(
                     f"[{index}/{total}] 旧任务失败，重新生成 | SKU={sku} | 旧task_id={task_id} | 原因={short_error(str(exc))}",
                     flush=True,
                 )
-                task_id, submit_latency_ms = submit_with_retry(client, prompt, row["reference_image"], config)
+                task_id, submit_latency_ms = submit_image_row(client, prompt, row, config, checkpoint_store)
                 checkpoint_store.upsert(build_submitted_record(row, task_id, submit_latency_ms))
                 print(f"[{index}/{total}] 已提交 | SKU={sku} | task_id={task_id}", flush=True)
                 poll_result, poll_count, wait_seconds = poll_until_done(client, task_id, config)
         else:
-            task_id, submit_latency_ms = submit_with_retry(client, prompt, row["reference_image"], config)
+            task_id, submit_latency_ms = submit_image_row(client, prompt, row, config, checkpoint_store)
             checkpoint_store.upsert(build_submitted_record(row, task_id, submit_latency_ms))
             print(f"[{index}/{total}] 已提交 | SKU={sku} | task_id={task_id}", flush=True)
             poll_result, poll_count, wait_seconds = poll_until_done(client, task_id, config)
-        image_urls = collect_image_urls(poll_result)
+        image_urls = client.parse_query(poll_result).urls
         if not image_urls:
             raise RuntimeError("结果中无图片URL")
         download_path = Path(config.download_dir) / f"{image_name}.png"
@@ -629,6 +663,15 @@ def process_one(
         checkpoint_store.upsert(record)
         print(f"[{index}/{total}] 生成成功 | SKU={sku} | 文件={download_path.name}", flush=True)
         return record
+    except CheckpointWriteError:
+        raise
+    except SubmissionUnknown as exc:
+        record = build_error_record(row, "SubmissionUnknown", str(exc), task_id=None)
+        record.task_id = None
+        record.status = "failed"
+        record.retryable = True
+        checkpoint_store.upsert(record)
+        return record
     except PollTimeoutError as exc:
         # 超时≠失败：保留 task_id，标记 pending，待下次续跑按 task_id 重新查询收敛。
         record = build_pending_record(row, str(exc), task_id=task_id, submit_latency_ms=submit_latency_ms)
@@ -638,9 +681,12 @@ def process_one(
     except Exception as exc:
         error_msg = str(exc)
         if is_permanent_failure(error_msg):
-            record = build_permanent_record(row, error_msg, task_id=task_id, submit_latency_ms=submit_latency_ms)
+            prev_attempts = int(row.get("attempts", 0) or 0)
+            record = build_permanent_record(
+                row, error_msg, task_id=task_id, submit_latency_ms=submit_latency_ms, attempts=prev_attempts + 1
+            )
             print(
-                f"[{index}/{total}] 永久失败(安全策略) | SKU={sku} | 类型={row.get('image_type') or '-'} | 错误={short_error(error_msg)}",
+                f"[{index}/{total}] 永久失败(安全策略) 第{prev_attempts + 1}次 | SKU={sku} | 类型={row.get('image_type') or '-'} | 错误={short_error(error_msg)}",
                 flush=True,
             )
         else:
@@ -650,31 +696,36 @@ def process_one(
         return record
 
 
+def submit_image_row(client, prompt, row, config, checkpoint_store):
+    if config.provider == "tuzi":
+        # Persist the intent for diagnostics. Retrying without an ID may duplicate a paid task.
+        client.build_payload(prompt, row["reference_image"], config)
+        intent = build_error_record(row, "SubmissionUnknown", "Submission started; awaiting task ID", task_id=None)
+        intent.task_id = None
+        intent.status = "submission_unknown"
+        intent.retryable = False
+        checkpoint_store.upsert(intent)
+    return submit_with_retry(client, prompt, row["reference_image"], config)
+
+
 def submit_with_retry(client: MxapiImageClient, prompt: str, reference_image: str, config: MxapiGenerateImagesConfig) -> tuple[str, int | None]:
-    payload = {
-        "prompt": prompt,
-        "aspect_ratio": config.aspect_ratio,
-        "quality": config.quality,
-        "resolution": config.resolution,
-        "reference_images": [reference_image],
-    }
+    payload = client.build_payload(prompt, reference_image, config)
+    max_attempts = gateway_max_attempts(client.gateway)
     last_error: Exception | None = None
-    for attempt in range(1, config.max_submit_retries + 1):
+    for attempt in range(1, max_attempts + 1):
         if config.submit_delay_seconds > 0:
             time.sleep(config.submit_delay_seconds)
         try:
             response, latency_ms = client.submit(payload)
-            if response.get("code") != 200:
-                raise RuntimeError(str(response.get("message") or response)[:1000])
-            task_id = (response.get("data") or {}).get("task_id")
-            if not task_id:
-                raise RuntimeError("No task_id in submit response")
+            task_id = client.parse_submit(response)
             return str(task_id), latency_ms
         except Exception as exc:
             last_error = exc
-            if attempt >= config.max_submit_retries:
+            if attempt >= max_attempts:
                 break
             time.sleep(config.retry_delay_seconds * attempt)
+    if config.provider == "tuzi":
+        raise SubmissionUnknown(f"Tuzi submission unconfirmed after {max_attempts} attempts; duplicate tasks may exist: {str(last_error)[:300]}") from last_error
     raise RuntimeError(f"submit failed: {last_error}")
 
 
@@ -695,34 +746,19 @@ def poll_until_done(client: MxapiImageClient, task_id: str, config: MxapiGenerat
         poll_count += 1
         payload, _ = client.query(task_id)
         last_payload = payload
-        if payload.get("code") != 200:
-            raise RuntimeError(str(payload.get("message") or payload)[:1000])
-        data = payload.get("data") or {}
-        status = data.get("status")
-        if status == "completed":
+        result = client.parse_query(payload)
+        if result.status == "completed":
             return payload, poll_count, int(time.time() - started)
-        if status == "failed":
+        if result.status == "failed":
             # 真实错误在 error_msg 字段（部分服务返回 error），一并兼容读取
-            error_msg = str(data.get("error_msg") or data.get("error") or "task failed")
+            error_msg = result.error or "task failed"
             raise TaskFailedError(error_msg)
     raise PollTimeoutError(f"poll timeout after {config.max_wait_seconds}s: {last_payload}")
 
 
 def collect_image_urls(payload: dict[str, Any]) -> list[str]:
     """从 MXAPI 返回中提取所有图片地址（source_images / proxy_images / images），去重保序。"""
-    result = ((payload.get("data") or {}).get("result") or {})
-    urls: list[str] = []
-    for key in ("source_images", "proxy_images", "images"):
-        values = result.get(key) or []
-        if isinstance(values, list):
-            urls.extend(str(item) for item in values if item)
-    seen: set[str] = set()
-    ordered: list[str] = []
-    for url in urls:
-        if url not in seen:
-            seen.add(url)
-            ordered.append(url)
-    return ordered
+    return MxapiImageAdapter.image_urls(payload)
 
 
 def short_error(message: str, limit: int = 120) -> str:
@@ -831,8 +867,10 @@ def build_permanent_record(
     error_message: str,
     task_id: str | None = None,
     submit_latency_ms: int | None = None,
+    attempts: int = 0,
 ) -> ImageGenerationRecord:
-    """永久失败记录：内容安全拦截等，重试/兜底均无意义；跨重启不再重新提交该类型。"""
+    """永久失败记录：内容安全拦截等。为避免 AI 幻觉误判直接放弃，允许最多重试
+    max_permanent_retries 次（attempts 累计已尝试次数）；达上限才真正放弃。"""
     return ImageGenerationRecord(
         row_number=row["row_number"],
         sku=row["sku"],
@@ -850,6 +888,7 @@ def build_permanent_record(
         submit_latency_ms=submit_latency_ms,
         poll_count=0,
         total_wait_seconds=None,
+        attempts=attempts,
         created_at=datetime.now().isoformat(timespec="seconds"),
     )
 
@@ -1030,5 +1069,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-
-

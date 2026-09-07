@@ -41,20 +41,25 @@ E:\WorkSpace\ai_gateway
 
 `src/ai_gateway/subtasks/*.py` 是可复用代码模块，负责实现某类阶段能力，例如 Excel 生成提示词、调用模型、写回 Excel。后续新业务任务可以复用这些模块，也可以新增模块。
 
-## 当前业务链路
+## 当前已完善业务链路
 
 ```mermaid
 graph TD
   A["Excel 商品表"] --> B["阶段 get_pic_prompt"]
   C["提示词模板"] --> B
   B --> D["generated_prompt_tasks.jsonl"]
-  D --> E["阶段 call_prompt_model"]
-  E --> F["BUZZ / OpenAI 兼容接口"]
-  F --> G["JSON 校验"]
-  G --> H["model_results.jsonl"]
-  G --> I["full_outputs 完整结果"]
-  G --> J["walmart_results.xlsx"]
+  D --> E["02 BUZZ 生成 6 张副图方案"]
+  E --> F["JSON 校验与断点续跑"]
+  A --> G["03b MXAPI 生成主图"]
+  F --> H["03 MXAPI 生成 6 张副图"]
+  G --> I["05b 主图上传 OSS"]
+  H --> J["05 副图上传 OSS"]
+  J --> K["06 副图结果表"]
+  I --> L["07 审核预览（手动）"]
+  J --> L
 ```
+
+`walmart_image_replace` 仍是独立的未完成业务，不应与上述图片生成链路混用或据其设计文档推断当前生成流程。
 
 ## 配置原则
 

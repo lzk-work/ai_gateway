@@ -1,9 +1,9 @@
-﻿{
+{
     "name":  "walmart_image_prompt",
-    "description":  "Walmart 图片生成提示词业务任务。业务级执行配置放在这里，阶段配置只描述阶段自己的输入、输出、模型和校验规则。",
+    "image_provider": "tuzi",
+    "description":  "Walmart 图片生成业务。总配置管理平台、源表、并发、选图和OSS对象模板；阶段配置只保留有效模型参数、列映射、模板和执行规则，批次路径由代码派生。",
     "oss":  {
-                "prefix":  "develop",
-                "key_template":  "develop/{sku}/{image_name}.png"
+                "key_template":  "walmart/{sku}/{image_name}.png"
             },
     "image_selection":  {
                 "image_type_order":  [
@@ -14,26 +14,27 @@
                     "Feature Explanation",
                     "Package & Detail / Trust Image"
                 ],
-                "desired_count":  6
+                "desired_count":  5
             },
     "input":  {
-                  "excel_path":  "E:/WorkSpace/ai_gateway/subtasks/walmart_image_prompt/input/test.xlsx",
+                  "excel_path":  "E:/WorkSpace/ai_gateway/subtasks/walmart_image_prompt/input/batch_flow_260905.xlsx",
                   "sheet_name":  "Sheet1"
               },
     "execution":  {
-                      "max_records":  10,
+                      "max_records":  1000,
                       "preflight_model":  true,
-                      "concurrency":  10,
+                      "concurrency":  8,
                       "image_concurrency":  10,
                       "oss_concurrency":  15
                   },
     "workflow":  {
+                     "buzz_sub_image_count":  4,
                      "generate_prompt_tasks":  true,
                      "call_buzz_model":  true,
-                     "generate_and_download_images":  true,
-                     "upload_oss":  true,
                      "generate_main_image":  true,
                      "upload_main_image":  true,
+                     "generate_and_download_images":  true,
+                     "upload_oss":  true,
                      "build_final_result":  true
                  }
 }

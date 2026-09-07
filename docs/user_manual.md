@@ -1,450 +1,148 @@
-﻿# 使用说明书
+# AI Gateway 使用说明
 
-## 1. 准备 API Key
+本说明聚焦当前已完善的 `walmart_image_prompt` 图片生成任务。完整字段、批次目录和断点续跑规则见 `subtasks/walmart_image_prompt/README.md`。
 
-当前 BUZZ 配置读取系统环境变量 `BUZZ_API_KEY`。
+## 1. 环境准备
 
-PowerShell 临时设置：
-
-```powershell
-$env:BUZZ_API_KEY="你的BUZZ_API_KEY"
-```
-
-这个设置只对当前 PowerShell 窗口有效。关闭窗口后需要重新设置。
-
-## 2. 修改业务配置
-
-当前业务任务目录：
-
-```text
-E:\WorkSpace\ai_gateway\subtasks\walmart_image_prompt
-```
-
-业务文件位置：
-
-- Excel 入参：subtasks/walmart_image_prompt/input/walmart_flow_test.xlsx。
-- 提示词模板：subtasks/walmart_image_prompt/prompts/walmart_image_prompt_template.txt。
-- 阶段出参：各阶段自己的 output/。
-
-常改字段：
-
-- 业务总配置 `input.excel_path`：Excel 文件路径。
-- 业务总配置 `input.sheet_name`：Sheet 名。
-- 第一阶段配置 `input.prompt_template_path`：提示词模板路径。
-- 第一阶段配置 `columns`：Excel 列名映射。
-
-业务总配置：
-
-```text
-subtasks/walmart_image_prompt/config.json
-```
-
-常改字段：
-
-- `input.excel_path`：本批入参 Excel，批次名也由这个文件名决定。
-- `input.sheet_name`：读取的 Sheet。
-- `execution.max_records`：本次最多处理多少条未成功记录。
-- `execution.concurrency`：BUZZ 文本模型并发数。
-- `execution.image_concurrency`：MXAPI 图片生成并发数。
-- `execution.preflight_model`：启动前是否检查 BUZZ 可用模型。
-- `workflow`：总流程阶段开关。
-
-第二阶段模型配置：
-
-```text
-subtasks/walmart_image_prompt/stages/call_prompt_model/config.json
-```
-
-常改字段：
-
-- `execution.gateway.name`：中转站。
-- `execution.model.name`：首选模型，当前为 `gpt-5.4`。
-- `execution.model.candidates`：允许自动切换的候选模型池。
-- `execution.model.stream`：是否开启流式响应，当前为 `true`。
-- `execution.model.max_tokens`：最大输出 token，当前为 `12000`。
-- `output.excel_result_path`：写回后的 Excel 路径。
-
-
-## 2.1 业务级处理数量
-
-处理数量只改业务任务根配置：
-
-```text
-subtasks/walmart_image_prompt/config.json
-```
-
-```json
-{
-  "execution": {
-    "max_records": 1
-  }
-}
-```
-
-测试时设为 `1`，批量 100 条设为 `100`，不限制则设为 `null`。阶段配置里不再设置处理数量。
-
-入参文件也只改业务任务根配置：
-
-```json
-{
-  "input": {
-    "excel_path": "E:/WorkSpace/ai_gateway/subtasks/walmart_image_prompt/input/walmart_flow.xlsx",
-    "sheet_name": "Sheet1"
-  }
-}
-```
-
-阶段配置里的 Excel 路径只作为兼容字段，运行时会被业务根配置覆盖。
-
-## 2.2 批次规则
-
-批次由入参 Excel 文件名决定，不按启动时间决定。
-
-例如：
-
-```text
-input/walmart_flow_test.xlsx
-```
-
-输出会放到：
-
-```text
-subtasks/walmart_image_prompt/batches/walmart_flow_test/
-```
-
-同一个文件中断后重跑，会继续使用同一个批次目录。需要重新跑一版独立结果时，先把入参文件名改成可区分的名字，例如 `walmart_flow_test_v2.xlsx`。
-
-批次目录已加入 `.gitignore`，不会进入 Git。
-## 3. 运行总流程
+安装依赖：
 
 ```powershell
-D:\Program\Anaconda\python.exe E:\WorkSpace\ai_gateway\subtasks\walmart_image_prompt\00_full_workflow.py
+pip install -r requirements.txt
 ```
 
-试运行，只看将要处理的数据，不调用接口、不写输出：
-
-```powershell
-D:\Program\Anaconda\python.exe E:\WorkSpace\ai_gateway\subtasks\walmart_image_prompt\00_full_workflow.py --dry-run
-```
-
-总流程是否执行图片生成下载，由业务总配置控制：
-
-```json
-"workflow": {
-  "generate_prompt_tasks": true,
-  "call_buzz_model": true,
-  "generate_and_download_images": false
-}
-```
-
-默认不执行图片生成下载，避免误消耗 MXAPI 额度。
-
-## 4. 分步执行
-
-第一步，只生成提示词任务，不调用模型、不消耗费用：
-
-```powershell
-D:\Program\Anaconda\python.exe E:\WorkSpace\ai_gateway\subtasks\walmart_image_prompt\01_generate_prompt_tasks.py
-D:\Program\Anaconda\python.exe E:\WorkSpace\ai_gateway\subtasks\walmart_image_prompt\01_generate_prompt_tasks.py --dry-run
-```
-
-第二步，调用 BUZZ 文本模型：
-
-```powershell
-D:\Program\Anaconda\python.exe E:\WorkSpace\ai_gateway\subtasks\walmart_image_prompt\02_call_buzz_model.py
-D:\Program\Anaconda\python.exe E:\WorkSpace\ai_gateway\subtasks\walmart_image_prompt\02_call_buzz_model.py --dry-run
-```
-
-第三步，生成图片下载入参，并调用 MXAPI 生成/下载图片：
-
-```powershell
-D:\Program\Anaconda\python.exe E:\WorkSpace\ai_gateway\subtasks\walmart_image_prompt\03_generate_and_download_images.py
-D:\Program\Anaconda\python.exe E:\WorkSpace\ai_gateway\subtasks\walmart_image_prompt\03_generate_and_download_images.py --dry-run
-```
-
-第五步，上传当前批次图片到阿里云 OSS：
-
-```powershell
-D:\Program\Anaconda\python.exe E:\WorkSpace\ai_gateway\subtasks\walmart_image_prompt\05_upload_oss.py --dry-run
-D:\Program\Anaconda\python.exe E:\WorkSpace\ai_gateway\subtasks\walmart_image_prompt\05_upload_oss.py
-```
-
-如果要处理手动归档的历史批次，例如 `walmart_flow_1`：
-
-```powershell
-D:\Program\Anaconda\python.exe E:\WorkSpace\ai_gateway\subtasks\walmart_image_prompt\05_upload_oss.py --dry-run --batch-name walmart_flow_1
-D:\Program\Anaconda\python.exe E:\WorkSpace\ai_gateway\subtasks\walmart_image_prompt\05_upload_oss.py --batch-name walmart_flow_1
-```
-
-`--dry-run` 不会调用 BUZZ/MXAPI，也不会写 JSONL、Excel 或图片文件，只打印本次将要处理的数据概览。
-
-OSS 上传所需平台配置放在：
+在 `configs/local.env` 配置：
 
 ```text
-configs/local.env
-```
-
-字段：
-
-```text
-ALIYUN_OSS_ACCESS_KEY_ID=你的AccessKeyId
-ALIYUN_OSS_ACCESS_KEY_SECRET=你的AccessKeySecret
-ALIYUN_OSS_ENDPOINT=oss-cn-beijing.aliyuncs.com
-ALIYUN_OSS_BUCKET=zlx-oss-db
+BUZZ_API_KEY=...
+MXAPI_API_KEY=...
+ALIYUN_OSS_BUCKET=...
+ALIYUN_OSS_ENDPOINT=...
+ALIYUN_OSS_ACCESS_KEY_ID=...
+ALIYUN_OSS_ACCESS_KEY_SECRET=...
 ALIYUN_OSS_DEFAULT_PREFIX=images
 ```
 
-## 5. 查看结果
+密钥也可以放在当前进程环境变量中；环境变量优先于 `local.env`。不要把真实密钥写入阶段 JSON 或提交到 Git。
 
-第一阶段输出：
+## 2. 配置本批任务
 
-```text
-subtasks/walmart_image_prompt/stages/get_pic_prompt/output/generated_prompt_tasks.jsonl
-```
+修改 `subtasks/walmart_image_prompt/config.json`：
 
-模型调用记录：
+- `input.excel_path`：输入 Excel；文件名决定批次名。
+- `input.sheet_name`：默认 `Sheet1`。
+- `execution.max_records`：本次最多处理的未成功 SKU 数。
+- `execution.concurrency`：BUZZ 并发。
+- `execution.image_concurrency`：MXAPI 并发。
+- `execution.oss_concurrency`：OSS 上传并发。
+- `workflow.*`：阶段开关。
+- `workflow.buzz_sub_image_count`：给 BUZZ 的副图参考张数。
+- `oss.*`：OSS key 规则。
 
-```text
-subtasks/walmart_image_prompt/stages/call_prompt_model/output/model_results.jsonl
-```
+当前阶段配置为：BUZZ 首选 `gpt-5.6-luna`、候选 `gpt-5.4`、非流式；MXAPI 使用 `gpt-image-2`，生成参数为 1:1、low、1K。以后以各阶段 `config.json` 的实际值为准。
 
-完整模型返回：
+输入 Excel 至少应有 `SKU`、`标题`、`五点`、`主图`，可选 `副图参考1` 至 `副图参考10`。
 
-```text
-subtasks/walmart_image_prompt/stages/call_prompt_model/output/full_outputs/
-```
+## 3. 先试运行
 
-写回 Excel：
-
-```text
-subtasks/walmart_image_prompt/stages/call_prompt_model/output/walmart_results.xlsx
-```
-
-## 6. 批量处理
-
-在业务任务根配置里修改：
-
-```json
-"execution": { "max_records": 100 }
-```
-
-如果 100 条返回 90 条成功，剩余失败记录会保存在 `model_results.jsonl` 中，包含状态、错误、是否可重试、请求耗时等信息。
-
-## 7. 结果校验
-
-第二阶段会检查：
-
-- 是否能解析为合法 JSON。
-- 是否包含 `product_analysis`。
-- `image_plan` 是否为 6 个对象。
-
-校验结果会保存在调用记录中。原始返回会保留到 `full_outputs/`，便于排查模型输出问题。
-
-## 8. 后续新增业务任务
-
-不要在项目根目录新增启动脚本。按下面结构新增：
-
-```text
-subtasks/<business_task_name>/
-  README.md
-  00_full_workflow.py
-  01_<step_name>.py
-  02_<step_name>.py
-  03_<step_name>.py
-  workflow_common.py
-  stages/
-    <stage_name>/
-      config.json
-      README.md
-      output/
-  scripts/
-```
-
-
-
-
-
-
-
-## 查询 BUZZ 当前可用模型
-
-如果运行时报：`model_not_found` 或 `Model "xxx" is not supported by any configured account in this group`，说明当前 BUZZ Key 所属账号组不支持该模型。先用下面脚本查询真实可用模型：
+从项目根目录执行：
 
 ```powershell
-D:\Program\Anaconda\python.exe E:\WorkSpace\ai_gateway\subtasks\walmart_image_prompt\scripts\list_buzz_models.py
+python subtasks/walmart_image_prompt/00_full_workflow.py --dry-run
 ```
 
-查询结果会保存到：
+试运行会显示：
 
-```text
-subtasks/walmart_image_prompt/scripts/output/available_buzz_models.json
+- 批次名和批次目录；
+- Excel 有效 SKU 数；
+- 各阶段开关；
+- 模型、并发和 API 配置；
+- 已成功跳过、待处理和本次选择数量；
+- 主图与副图 checkpoint 状态。
+
+试运行不会调用 BUZZ/MXAPI、不会上传 OSS，也不会写业务结果文件。
+
+## 4. 正式运行
+
+```powershell
+python subtasks/walmart_image_prompt/00_full_workflow.py
 ```
 
-然后把 `stages/call_prompt_model/config.json` 里的 `execution.model.name` 改成列表中真实存在的模型。
+总流程实际顺序：
 
+1. 01 生成 BUZZ 提示词任务。
+2. 02 调 BUZZ 生成并校验 6 张副图方案。
+3. 03b 调 MXAPI 生成优化主图。
+4. 03 调 MXAPI 生成 6 张副图；开启主图生成时，只处理主图成功的 SKU。
+5. 05b 上传主图 OSS。
+6. 05 上传副图 OSS。
+7. 06 生成副图结果表。
+8. 打印批次统计。
 
-## BUZZ Key 与模型预检查
+正式执行前会要求确认。当前根配置的所有流程开关均为 `true`，因此会产生模型额度消耗和 OSS 写入。
 
-BUZZ Key 读取顺序：
+## 5. 分步运行
 
-1. 当前进程环境变量 `BUZZ_API_KEY`。
-2. 如果环境变量没有设置，则尝试读取项目内 `configs/local.env`。
-
-`configs/local.env` 已加入 `.gitignore`，可以放本机密钥，例如：
-
-```text
-BUZZ_API_KEY=你的BUZZ密钥
+```powershell
+python subtasks/walmart_image_prompt/01_generate_prompt_tasks.py
+python subtasks/walmart_image_prompt/02_call_buzz_model.py
+python subtasks/walmart_image_prompt/03b_generate_main_images.py
+python subtasks/walmart_image_prompt/03_generate_and_download_images.py
+python subtasks/walmart_image_prompt/05b_upload_main_oss.py
+python subtasks/walmart_image_prompt/05_upload_oss.py
+python subtasks/walmart_image_prompt/06_build_final_image_result.py
 ```
 
-业务启动时会先执行模型预检查，并打印：
+以上阶段都支持 `--dry-run`。05、05b、06 还支持 `--batch-name`。
 
-```text
-=== 启动检查 ===
-BUZZ Key: BUZZ_API_KEY (xxxxxxxxxxxx)
-可用模型数: 7
-模型预检: 通过 (gpt-5.4)
+审核预览不在总流程内，手动执行：
+
+```powershell
+python subtasks/walmart_image_prompt/07_export_review.py
+python subtasks/walmart_image_prompt/07_export_review.py --batch <批次名>
 ```
 
-`buzz_key_fingerprint` 是 Key 的安全指纹，不会泄露原始 Key。查询模型脚本和业务启动脚本打印的指纹应该一致；如果不一致，说明两个进程用的不是同一个 Key。
+查看统计：
 
-如果不想每次启动前查询 `/v1/models`，可在业务任务根配置中关闭：
-
-```json
-"execution": {
-  "preflight_model": false
-}
+```powershell
+python subtasks/walmart_image_prompt/99_batch_stats.py
 ```
 
-## 启动前模型验证
+## 6. 断点续跑
 
-业务任务默认每次启动都会先调用 BUZZ `/v1/models` 验证当前 Key 是否支持阶段配置里的模型。验证在任何业务阶段执行之前发生：
+- BUZZ：成功且校验通过的 SKU 跳过；其他记录重跑。
+- MXAPI：提交后立即保存 `task_id`；中断后优先继续轮询原任务，避免重复提交和重复扣费。
+- OSS：主图、副图各自保存 checkpoint；成功对象跳过。
+- `max_records` 按 SKU 计算，不按展开后的图片行数计算。
 
-1. 读取 `BUZZ_API_KEY`。
-2. 查询当前 Key 可用模型。
-3. 保存可用模型列表到 `subtasks/walmart_image_prompt/scripts/output/available_buzz_models.json`。
-4. 如果主模型不可用，会从候选模型里选择第一个当前可用模型。
-5. 如果主模型和候选模型都不可用，立即停止，不生成提示词、不调用正式接口。
+同一个输入文件会继续使用同一个 `batches/<输入文件名>/`。若要重新建立一套互不影响的结果，请更换输入 Excel 文件名。
 
-保留默认配置即可：
+## 7. 输出说明
 
-```json
-"execution": {
-  "preflight_model": true
-}
+- BUZZ 完整输出：`02_call_buzz_model/full_outputs/`。
+- 主图生成结果：`04b_generate_main_images/`。
+- 副图生成结果：`04_generate_images/`。
+- 主图 OSS 结果：`05b_upload_main_oss/`。
+- 副图 OSS 结果及最终副图表：`05_upload_oss/`。
+- 主图+副图审核预览：`07_review/审核预览.xlsx`。
+
+06 的 `最终图片结果_由sub生成.xlsx` 是副图口径；生成的新主图不会写进该文件。需要查看合并后的生成主图、副图和 OSS 链接时使用 07 审核预览。
+
+## 8. 常见问题
+
+### BUZZ 模型不可用
+
+执行：
+
+```powershell
+python subtasks/walmart_image_prompt/scripts/list_buzz_models.py
 ```
 
-只有在明确不需要预检时才改为 `false`。
+然后检查 `stages/call_prompt_model/config.json` 的首选和候选模型。正式 02 阶段默认会预检 `/v1/models`；没有任何配置模型可用时会在业务调用前停止。
 
-## 断点续跑与跳过成功记录
+### 图片任务中断
 
-模型调用阶段默认开启断点续跑：
+不要删除 checkpoint。重新运行对应 03/03b 阶段，程序会继续轮询已有 `task_id`；只有没有可复用任务或确认永久失败时才重新提交。
 
-```json
-"resume": {
-  "skip_success": true
-}
-```
+### 需要重新跑一整批
 
-规则：
-
-- 历史结果文件 `model_results.jsonl` 中 `status=success` 且 `validation_status=passed` 的任务会跳过。
-- 失败、校验失败、没有处理过的任务会继续处理。
-- 业务级 `max_records` 表示“本次最多处理多少条未成功记录”，已成功记录不会占用名额。
-- 新结果会和历史结果合并写回，不会清空已经成功的记录。
-
-例如：第一批 100 条，90 条成功、10 条失败；下次启动会跳过 90 条，只处理剩下 10 条失败/未成功记录。
-
-## 控制台调用过程输出
-
-模型调用阶段会逐条打印进度，便于观察批量任务是否还在工作：
-
-```text
-=== BUZZ 文本模型阶段 ===
-任务总数: 100 | 已成功跳过: 90 | 本次待处理: 10
-调用并发: 2
-[1/10] 开始 | SKU=XJ-xxx | 模型=gpt-5.4 | 网关=buzz
-[1/10] 完成 SKU=XJ-xxx 状态=成功 耗时=68.3s 校验=通过
-```
-
-字段说明：
-
-- `开始`：某条任务真正开始调用模型。
-- `index=1/10`：当前是本次待处理任务中的第几条。
-- `sku`：当前处理的业务记录。
-- `status`：接口调用是否成功。
-- `validation`：返回 JSON 是否符合模板校验。
-- `耗时`：本条请求耗时。
-- `error`：失败时的错误摘要。
-
-全部处理完后还会打印：
-
-```text
-结果日志: ...
-结果Excel: ...
-```
-
-
-## 并发调用配置
-
-业务任务支持多线程同时调用模型，配置仍然只放在业务总配置：
-
-```json
-"execution": {
-  "max_records": 10,
-  "concurrency": 1,
-  "preflight_model": true
-}
-```
-
-- `concurrency: 1`：单线程，最稳，适合测试。
-- `concurrency: 2` 或 `3`：并发调用，提高批量速度。
-- 不建议一开始开太大，避免触发 BUZZ 或上游模型限流。
-
-实现规则：
-
-- 多线程只负责 API 调用。
-- JSONL 和 Excel 结果由主线程统一合并写回。
-- 历史成功记录仍会跳过，不会重复调用。
-- 控制台会打印每条开始和结束；并发时结束顺序可能和开始顺序不同，但最终结果会按原任务顺序合并。
-
-## Excel 结果表字段
-
-Excel 结果表只保留业务查看需要的核心字段：
-
-- `ai_status`
-- `ai_validation_status`
-- `ai_image_plan_json`
-- `ai_error_message`
-- `ai_processed_at`
-
-模型、网关、request id、完整原始返回、校验细节等调试信息不写入 Excel，统一保存在：
-
-```text
-stages/call_prompt_model/output/model_results.jsonl
-stages/call_prompt_model/output/full_outputs/
-```
-
-## 批量日志瘦身
-
-为支持几百到几千条批量处理，主日志 `model_results.jsonl` 已改为轻量索引日志，只保存：
-
-- 任务 ID、SKU、源 Excel 行号
-- 状态、模型、网关、request id
-- 耗时、重试、错误摘要
-- JSON 校验状态
-- 完整结果文件路径
-
-主日志不再重复保存：
-
-- 长提示词
-- 源任务完整内容
-- 模型完整返回正文
-- raw response
-
-完整模型返回仍按 SKU 单独保存在：
-
-```text
-stages/call_prompt_model/output/full_outputs/
-```
-
-Excel 需要完整结果时，会根据 `full_output_path` 读取对应文件再写入结果表。断点续跑仍然读取轻量日志判断成功记录并跳过。
+复制输入 Excel 并使用新文件名，再修改根配置的 `input.excel_path`。直接删除 checkpoint 会失去已有任务关联，可能导致重复调用。

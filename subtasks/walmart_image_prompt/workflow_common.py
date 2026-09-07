@@ -37,6 +37,105 @@ def task_execution() -> dict[str, Any]:
     return load_task_config().get("execution", {})
 
 
+def image_provider() -> str:
+    provider = load_task_config().get("image_provider", "mxapi")
+    if provider not in {"tuzi", "mxapi"}:
+        raise ValueError(f"Unsupported image_provider: {provider}")
+    return provider
+
+
+def check_image_provider(*, bind: bool = False) -> None:
+    from ai_gateway.clients.image_batch import check_batch_provider
+    check_batch_provider(batch_root(), image_provider(), bind=bind)
+
+
+def apply_image_provider(config):
+    config.provider = image_provider()
+    config.gateway = config.provider
+    gateway = image_gateway_contract()
+    config.submit_endpoint = gateway["endpoint_submit"]
+    config.query_endpoint = gateway["endpoint_query"]
+    return config
+
+
+def image_gateway_contract() -> dict[str, str]:
+    """Protocol endpoints are code, not per-stage user settings."""
+    provider = image_provider()
+    submit, query = {
+        "tuzi": ("/async/v1/images/generations", "/get-async"),
+        "mxapi": ("/api/v2/gpt-image-2", "/api/v2/gpt-image/task"),
+    }[provider]
+    return {"name": provider, "endpoint_submit": submit, "endpoint_query": query}
+
+
+def load_stage_data(path: str | Path) -> dict[str, Any]:
+    """Resolve the single business input and derived paths before parsing a stage."""
+    path = Path(path)
+    data = json.loads(path.read_text(encoding="utf-8-sig"))
+    stage = path.parent.name
+    if set(data.get("retry", {})) & {"max_retries", "max_submit_retries"}:
+        raise ValueError(f"{stage}: configure retry count only in configs/gateways.yaml")
+    obsolete = set(data) & {"output", "batch_id", "validation", "prompt_column"}
+    obsolete_inputs = set(data.get("input", {})) & {
+        "excel_path", "source_excel_path", "source_sheet_name", "model_results_path",
+        "prompt_tasks_path", "image_result_excel_path", "download_dir",
+    }
+    if obsolete or obsolete_inputs:
+        raise ValueError(f"{stage}: obsolete stage settings; use business config/derived paths: {sorted(obsolete | obsolete_inputs)}")
+    if stage in {"generate_main_image", "generate_sub_images"} and "gateway" in data.get("execution", {}):
+        raise ValueError(f"{stage}: choose image_provider only in business config")
+    source = task_input()
+    if not source.get("excel_path"):
+        raise ValueError("config.json input.excel_path is required")
+    paths = batch_paths()
+    inputs = data.setdefault("input", {})
+    outputs = data.setdefault("output", {})
+    if stage == "get_pic_prompt":
+        inputs.update(excel_path=source["excel_path"], sheet_name=source.get("sheet_name", "Sheet1"))
+        outputs["prompt_tasks_path"] = str(paths["prompt_tasks"])
+        data["batch_id"] = batch_name_from_input()
+    elif stage == "call_prompt_model":
+        inputs.update(prompt_tasks_path=str(paths["prompt_tasks"]), source_excel_path=source["excel_path"])
+        outputs.update(model_results_path=str(paths["model_results"]), full_outputs_dir=str(paths["full_outputs"]),
+                       excel_result_path=str(paths["model_excel"]))
+    elif stage in {"generate_main_image", "generate_sub_images"}:
+        main = stage == "generate_main_image"
+        data["execution"]["gateway"] = image_gateway_contract()
+        inputs.update(excel_path=str(paths["main_image_input_excel" if main else "image_input_excel"]),
+                      model_results_path=str(paths["model_results"]))
+        keys = ("main_image_excel", "main_image_results", "main_image_checkpoint", "main_download_dir", "main_raw_responses") if main else (
+            "image_excel", "image_results", "image_checkpoint", "download_dir", "raw_responses")
+        outputs.update(zip(("excel_path", "results_path", "checkpoint_path", "download_dir", "raw_responses_dir"),
+                           (str(paths[key]) for key in keys)))
+    elif stage in {"upload_main_image", "upload_oss"}:
+        main = stage == "upload_main_image"
+        inputs.update(image_result_excel_path=str(paths["main_image_excel" if main else "image_excel"]),
+                      image_results_path=str(paths["main_image_results" if main else "image_results"]),
+                      download_dir=str(paths["main_download_dir" if main else "download_dir"]))
+        keys = ("main_oss_excel", "main_oss_results", "main_oss_checkpoint") if main else (
+            "oss_excel", "oss_results", "oss_checkpoint")
+        outputs.update(zip(("excel_path", "results_path", "checkpoint_path"), (str(paths[key]) for key in keys)))
+        data["oss"].update(load_task_config()["oss"])
+        data["limits"]["max_workers"] = task_execution().get("oss_concurrency", task_execution().get("concurrency", 1))
+    elif stage in {"build_main_image_input", "build_sub_image_download_input"}:
+        inputs.update(source_excel_path=source["excel_path"], source_sheet_name=source.get("sheet_name", "Sheet1"))
+        main = stage == "build_main_image_input"
+        if not main:
+            inputs["model_results_path"] = str(paths["model_results"])
+        outputs["excel_path"] = str(paths["main_image_input_excel" if main else "image_input_excel"])
+    else:
+        raise ValueError(f"Unknown Walmart stage: {stage}")
+    return data
+
+
+def load_stage_config(path, loader):
+    """Keep legacy shared loaders unchanged for other businesses."""
+    config = loader(path, config_data=load_stage_data(path))
+    if Path(path).parent.name in {"generate_main_image", "generate_sub_images"}:
+        apply_image_provider(config)
+    return config
+
+
 def task_input() -> dict[str, Any]:
     return load_task_config().get("input", {})
 
@@ -65,8 +164,7 @@ def batch_name_from_input() -> str:
     excel_path = input_config.get("excel_path")
     if excel_path:
         return safe_batch_name(Path(excel_path).stem)
-    from ai_gateway.subtasks.walmart_get_pic_prompt import load_config
-    return safe_batch_name(Path(load_config(GET_PROMPT_CONFIG).input_excel).stem)
+    raise ValueError("config.json input.excel_path is required")
 
 
 def batch_root(batch_name: str | None = None) -> Path:
@@ -115,6 +213,13 @@ def apply_batch_to_prompt_config(config):
         config.input_excel = input_config["excel_path"]
     if input_config.get("sheet_name"):
         config.sheet_name = input_config["sheet_name"]
+    # BUZZ 副图参考数量(sub_image_count)唯一来源：总配置 workflow.buzz_sub_image_count
+    # （stage 配置不再保留该字段，避免两处不一致）
+    workflow = load_task_config().get("workflow", {})
+    if "buzz_sub_image_count" in workflow and workflow["buzz_sub_image_count"] is not None:
+        config.sub_image_count = int(workflow["buzz_sub_image_count"])
+    if workflow.get("buzz_sub_reference_columns"):
+        config.sub_reference_columns = list(workflow["buzz_sub_reference_columns"])
     paths = batch_paths()
     config.output_path = str(paths["prompt_tasks"])
     config.batch_id = batch_name_from_input()
@@ -134,6 +239,7 @@ def apply_batch_to_call_config(config):
 
 
 def apply_batch_to_image_config(config):
+    apply_image_provider(config)
     paths = batch_paths()
     config.input_excel_path = str(paths["image_input_excel"])
     config.model_results_path = str(paths["model_results"])
@@ -153,17 +259,15 @@ def apply_batch_to_oss_config(config, batch_name: str | None = None):
     config.output_excel_path = str(paths["oss_excel"])
     config.output_results_path = str(paths["oss_results"])
     config.checkpoint_path = str(paths["oss_checkpoint"])
-    # 业务总配置优先：config.json 的 oss 块覆盖阶段配置（stages/upload_oss/config.json）的默认值。
+    # OSS对象模板只有业务总配置一处来源。
     task_oss = load_task_config().get("oss", {})
-    if task_oss.get("prefix") is not None:
-        config.oss_prefix = str(task_oss["prefix"]).strip("/")
     if task_oss.get("key_template") is not None:
         config.key_template = str(task_oss["key_template"])
     return config
 
 
 def build_image_input_config_for_batch() -> dict[str, Any]:
-    config = json.loads(BUILD_IMAGE_INPUT_CONFIG.read_text(encoding="utf-8-sig"))
+    config = load_stage_data(BUILD_IMAGE_INPUT_CONFIG)
     input_config = task_input()
     paths = batch_paths()
     if input_config.get("excel_path"):
@@ -176,7 +280,7 @@ def build_image_input_config_for_batch() -> dict[str, Any]:
 
 
 def build_main_image_input_config_for_batch() -> dict[str, Any]:
-    config = json.loads(BUILD_MAIN_CONFIG.read_text(encoding="utf-8-sig"))
+    config = load_stage_data(BUILD_MAIN_CONFIG)
     input_config = task_input()
     paths = batch_paths()
     if input_config.get("excel_path"):
@@ -188,6 +292,7 @@ def build_main_image_input_config_for_batch() -> dict[str, Any]:
 
 
 def apply_batch_to_main_image_config(config):
+    apply_image_provider(config)
     paths = batch_paths()
     config.input_excel_path = str(paths["main_image_input_excel"])
     config.model_results_path = str(paths["model_results"])
@@ -207,10 +312,8 @@ def apply_batch_to_main_oss_config(config, batch_name: str | None = None):
     config.output_excel_path = str(paths["main_oss_excel"])
     config.output_results_path = str(paths["main_oss_results"])
     config.checkpoint_path = str(paths["main_oss_checkpoint"])
-    # 业务总配置优先：config.json 的 oss 块覆盖阶段配置默认值。
+    # OSS对象模板只有业务总配置一处来源。
     task_oss = load_task_config().get("oss", {})
-    if task_oss.get("prefix") is not None:
-        config.oss_prefix = str(task_oss["prefix"]).strip("/")
     if task_oss.get("key_template") is not None:
         config.key_template = str(task_oss["key_template"])
     return config
@@ -265,7 +368,7 @@ def preflight_buzz_model(call_config) -> None:
 def build_current_prompt_task_preview_rows() -> list[dict[str, Any]]:
     from ai_gateway.subtasks.walmart_get_pic_prompt import _is_empty_row, load_config, read_excel_rows, validate_required_columns
 
-    config = apply_batch_to_prompt_config(load_config(GET_PROMPT_CONFIG))
+    config = apply_batch_to_prompt_config(load_stage_config(GET_PROMPT_CONFIG, load_config))
     if not Path(config.input_excel).exists():
         return []
     batch_id = batch_name_from_input()

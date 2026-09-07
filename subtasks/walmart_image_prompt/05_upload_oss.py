@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+from workflow_common import load_stage_config
 
 from workflow_common import UPLOAD_OSS_CONFIG, apply_batch_to_oss_config, print_batch_info, task_execution
 
@@ -18,7 +19,7 @@ def main() -> None:
     print("\n=== 05 上传 OSS ===")
     print_batch_info(args.batch_name)
     execution = task_execution()
-    config = apply_batch_to_oss_config(load_config(UPLOAD_OSS_CONFIG), args.batch_name)
+    config = apply_batch_to_oss_config(load_stage_config(UPLOAD_OSS_CONFIG, load_config), args.batch_name)
     config.max_records = execution.get("max_records")
     config.concurrency = execution.get("oss_concurrency", execution.get("concurrency", 1))
     config.batch_size = execution.get("oss_batch_size", config.batch_size)

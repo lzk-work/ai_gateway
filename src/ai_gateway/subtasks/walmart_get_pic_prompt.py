@@ -26,6 +26,10 @@ class WalmartPromptConfig:
     title_column: str = "标题"
     bullet_column: str = "五点"
     image_columns: list[str] = field(default_factory=lambda: ["主图"])
+    # 副图参考列（可选，最多 10 个，如「副图参考1」…「副图参考10」）。BUZZ 调用时在主图之外，
+    # 额外把前 sub_image_count 张非空的副图参考图作为参考图传给模型（n 由参数配置）。
+    sub_reference_columns: list[str] = field(default_factory=list)
+    sub_image_count: int = 0
     context_policy: dict[str, Any] = field(
         default_factory=lambda: {
             "mode": "stateless",
@@ -65,8 +69,8 @@ class WalmartPromptRecord:
     created_at: str
 
 
-def load_config(path: str | Path) -> WalmartPromptConfig:
-    data = json.loads(Path(path).read_text(encoding="utf-8-sig"))
+def load_config(path: str | Path, *, config_data: dict[str, Any] | None = None) -> WalmartPromptConfig:
+    data = config_data if config_data is not None else json.loads(Path(path).read_text(encoding="utf-8-sig"))
     if "input" in data or "output" in data or "columns" in data:
         data = {
             "name": data["name"],
@@ -79,12 +83,39 @@ def load_config(path: str | Path) -> WalmartPromptConfig:
             "title_column": data.get("columns", {}).get("title", "标题"),
             "bullet_column": data.get("columns", {}).get("bullets", "五点"),
             "image_columns": data.get("columns", {}).get("images", ["主图"]),
+            "sub_reference_columns": data.get("columns", {}).get("sub_reference_images", []),
             "context_policy": data.get("context_policy", {}),
             "limits": data.get("limits", {}),
             "placeholder_mapping": data.get("placeholder_mapping", {}),
             "include_row_metadata": data.get("include_row_metadata", True),
         }
     return WalmartPromptConfig(**data)
+
+
+def collect_reference_images(
+    row: dict[str, Any],
+    image_columns: list[str],
+    sub_reference_columns: list[str],
+    sub_image_count: int,
+) -> list[str]:
+    """收集 BUZZ 参考图 URL：先主图列（image_columns），再追加前 sub_image_count 张非空的副图参考列。
+
+    副图参考列可选、可不全：某 SKU 副图参考不足 n 张时，用实际有的即可，不报错。
+    顺序保证主图在前，副图参考按列顺序（副图参考1、副图参考2…）在后。
+    """
+    urls: list[str] = [
+        str(row.get(column)).strip()
+        for column in image_columns
+        if row.get(column)
+    ]
+    if sub_image_count and sub_image_count > 0:
+        for column in sub_reference_columns:
+            if len(urls) - len([c for c in image_columns if row.get(c)]) >= sub_image_count:
+                break
+            value = row.get(column)
+            if value:
+                urls.append(str(value).strip())
+    return urls
 
 
 def run(config: WalmartPromptConfig) -> list[WalmartPromptRecord]:
@@ -103,11 +134,12 @@ def run(config: WalmartPromptConfig) -> list[WalmartPromptRecord]:
             row,
             placeholder_mapping=config.placeholder_mapping,
         )
-        image_urls = [
-            str(row.get(column)).strip()
-            for column in config.image_columns
-            if row.get(column)
-        ]
+        image_urls = collect_reference_images(
+            row,
+            config.image_columns,
+            config.sub_reference_columns,
+            config.sub_image_count,
+        )
         precheck_status, warnings, errors = precheck_task(
             rendered_prompt,
             image_urls,
@@ -317,4 +349,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

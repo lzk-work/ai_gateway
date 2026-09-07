@@ -276,7 +276,7 @@ Excel 写回字段建议：
 01 -> 02 -> 03 -> 05
 ```
 
-默认 `upload_oss=false`，避免误上传。需要上传时再打开，或单独执行：
+是否上传以业务根配置的 `workflow.upload_oss` 为准。当前 `walmart_image_prompt/config.json` 为 `true`，正式总流程会上传副图；主图由独立的 `workflow.upload_main_image` 和 `05b_upload_main_oss.py` 控制。执行前应先运行总流程 `--dry-run` 确认范围，也可以单独执行：
 
 ```powershell
 D:\Program\Anaconda\python.exe E:\WorkSpace\ai_gateway\subtasks\walmart_image_prompt\05_upload_oss.py --dry-run

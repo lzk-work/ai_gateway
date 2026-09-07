@@ -1,17 +1,24 @@
 ﻿default_gateway: buzz
 
 gateways:
+  tuzi:
+    type: tuzi
+    base_url: https://api.tu-zi.com
+    api_key_env: TUZI_API_KEY
+    auth_header: Authorization
+    timeout_seconds: 120
+    max_retries: 2
   buzz:
     type: buzz
     base_url: https://buzzai.cc
     api_key_env: BUZZ_API_KEY
     auth_header: Authorization
     timeout_seconds: 300
-    max_retries: 3
+    max_retries: 2
   mxapi:
     type: mxapi
     base_url: https://open.mxapi.org
     api_key_env: MXAPI_API_KEY
     auth_header: Authorization
-    timeout_seconds: 600
-    max_retries: 3
+    timeout_seconds: 300
+    max_retries: 2

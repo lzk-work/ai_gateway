@@ -97,7 +97,7 @@ Use only generic product benefit descriptions based on real product features.
 2. product_analysis只输出简短结论，每个数组最多3项，每项不超过12个英文单词。
 3. 每个image_plan对象中的文字字段必须简短。
 4. ai_image_generation_prompt只输出该图片的差异化生成内容，不要重复最终统一限制词，不要重复Product Accuracy Requirement，不要重复Strict Dimension Restriction，不要重复Walmart Image Requirement。
-5. 每个ai_image_generation_prompt控制在700英文字符以内。
+5. 每个ai_image_generation_prompt控制在1000英文字符以内。
 6. product_accuracy_restrictions字段不要重复完整限制词，只输出：["Use global_prompt_restrictions.product_accuracy_requirement", "Use global_prompt_restrictions.additional_product_structure_restriction"]
 7. walmart_image_restrictions字段不要重复完整限制词，只输出：["Use global_prompt_restrictions.walmart_image_requirement", "Use global_prompt_restrictions.text_compliance_requirement", "Use global_prompt_restrictions.strict_dimension_restriction"]
 8. global_prompt_restrictions保留一次完整公共限制词，供系统在生成图片时与每张ai_image_generation_prompt拼接使用。

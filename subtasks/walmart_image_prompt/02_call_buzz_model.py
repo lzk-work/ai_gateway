@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+from workflow_common import load_stage_config
 
 from workflow_common import (
     CALL_MODEL_CONFIG,
@@ -35,7 +36,7 @@ def main() -> None:
     args = parser.parse_args()
 
     execution = task_execution()
-    config = apply_batch_to_call_config(load_config(CALL_MODEL_CONFIG))
+    config = apply_batch_to_call_config(load_stage_config(CALL_MODEL_CONFIG, load_config))
     config.max_records = execution.get("max_records")
     config.concurrency = execution.get("concurrency", 1)
     print_batch_info()

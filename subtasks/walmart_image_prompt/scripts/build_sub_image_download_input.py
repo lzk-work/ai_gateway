@@ -11,11 +11,15 @@
 from __future__ import annotations
 
 import json
+import sys
 from copy import copy
 from pathlib import Path
 from typing import Any
 
 from openpyxl import load_workbook
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "src"))
 
 from ai_gateway.validators.result_validator import extract_json
 
@@ -284,7 +288,8 @@ def remove_columns_by_header(worksheet, header_names: list[str]) -> None:
 
 
 def main() -> None:
-    config = json.loads(CONFIG_PATH.read_text(encoding="utf-8-sig"))
+    from workflow_common import build_image_input_config_for_batch
+    config = build_image_input_config_for_batch()
     run(config)
 
 

@@ -9,29 +9,32 @@
 配置文件：
 
 ```text
-subtasks/walmart_image_prompt/config.json
+subtasks/walmart_image_prompt/stages/call_prompt_model/config.json
 ```
 
 关键输入：
 
-- `input.prompt_tasks_path`：第一阶段输出的 JSONL。
-- `input.source_excel_path`：用于写回结果的源 Excel。
+- 第一阶段输出的 JSONL：由批次路径派生，不在本阶段重复配置。
+- 用于写回结果的源 Excel：只在业务总配置 input.excel_path 设置。
+
+本阶段已删除不生效的 validation、context_policy、retryable_http_status 与重复网关信息。代码中的 JSON 与 6 项 image_plan 校验仍生效。完整说明见 [配置归属](../../CONFIGURATION.md)。
 
 ## 模型与中转站
 
 本阶段自己的模型和中转站配置写在 `execution` 内，不依赖其他业务任务：
 
 - `execution.gateway.name`：当前为 `buzz`。
-- `execution.model.name`：当前为 `gpt-5.4-mini`。
-- `execution.model.stream`：当前为 `true`。
+- `execution.model.name`：当前首选 `gpt-5.6-luna`。
+- `execution.model.candidates`：当前候选为 `gpt-5.4`。
+- `execution.model.stream`：当前为 `false`。`gpt-5.6-luna` 属于 OpenAI/Codex 上游，`gpt-*` 模型直接由 BUZZ 的非流式 `/v1/responses` 接口处理，不再先请求 `/v1/chat/completions`。
 - `execution.model.max_tokens`：当前为 `12000`。
 
 ## 输出
 
 ```text
-subtasks/walmart_image_prompt/stages/call_prompt_model/output/model_results.jsonl
-subtasks/walmart_image_prompt/stages/call_prompt_model/output/full_outputs/
-subtasks/walmart_image_prompt/stages/call_prompt_model/output/walmart_results.xlsx
+batches/<批次名>/02_call_buzz_model/model_results.jsonl
+batches/<批次名>/02_call_buzz_model/full_outputs/
+batches/<批次名>/02_call_buzz_model/walmart_results.xlsx
 ```
 
 保存策略：
@@ -43,7 +46,7 @@ subtasks/walmart_image_prompt/stages/call_prompt_model/output/walmart_results.xl
 
 ## 重试
 
-失败记录会写入 `model_results.jsonl`。后续可以基于失败状态筛选重跑，避免手工改数据库状态；这部分后面可继续扩展成“按批次失败记录重试”的业务脚本。
+失败记录会写入 `model_results.jsonl`。同一批次重跑时会自动跳过已成功且校验通过的 SKU，并继续处理失败、未处理或校验失败记录。
 
 
 
@@ -80,8 +83,8 @@ Excel 结果表只保留业务查看需要的核心字段：
 模型、网关、request id、完整原始返回、校验细节等调试信息不写入 Excel，统一保存在：
 
 ```text
-stages/call_prompt_model/output/model_results.jsonl
-stages/call_prompt_model/output/full_outputs/
+batches/<批次名>/02_call_buzz_model/model_results.jsonl
+batches/<批次名>/02_call_buzz_model/full_outputs/
 ```
 
 ## 批量日志瘦身
@@ -104,7 +107,7 @@ stages/call_prompt_model/output/full_outputs/
 完整模型返回仍按 SKU 单独保存在：
 
 ```text
-stages/call_prompt_model/output/full_outputs/
+batches/<批次名>/02_call_buzz_model/full_outputs/
 ```
 
 Excel 需要完整结果时，会根据 `full_output_path` 读取对应文件再写入结果表。断点续跑仍然读取轻量日志判断成功记录并跳过。

@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 import argparse
+from workflow_common import load_stage_config
 from pathlib import Path
 
 from workflow_common import (
+    check_image_provider,
+    image_provider,
     GENERATE_IMAGES_CONFIG,
     apply_batch_to_image_config,
     batch_paths,
@@ -35,6 +38,8 @@ def main() -> None:
     parser.add_argument("--dry-run", action="store_true", help="只预览图片任务，不生成下载模板，不调用 MXAPI。")
     args = parser.parse_args()
 
+    check_image_provider(bind=not args.dry_run)
+
     if args.dry_run:
         preview()
         return
@@ -43,9 +48,9 @@ def main() -> None:
     print_batch_info()
     build_image_input(build_image_input_config_for_batch())
 
-    print("\n=== 03-2 调用 MXAPI 生成并下载图片 ===")
+    print(f"\n=== 03-2 调用 {image_provider().upper()} 生成并下载图片 ===")
     execution = task_execution()
-    config = apply_batch_to_image_config(load_config(GENERATE_IMAGES_CONFIG))
+    config = apply_batch_to_image_config(load_stage_config(GENERATE_IMAGES_CONFIG, load_config))
     config.max_records = execution.get("max_records")
     config.concurrency = execution.get("image_concurrency", execution.get("concurrency", 1))
     # 副图依赖主图成功：仅当总流程开启主图时启用，避免主图没生成白花副图积分
@@ -63,9 +68,9 @@ def main() -> None:
 
 def preview() -> None:
     print("\n=== 03 生成并下载图片 | 试运行 ===")
-    print("试运行: 不生成下载模板，不调用 MXAPI，不下载图片")
+    print("试运行: 不生成下载模板，不调用生图平台，不下载图片")
     execution = task_execution()
-    config = load_config(GENERATE_IMAGES_CONFIG)
+    config = load_stage_config(GENERATE_IMAGES_CONFIG, load_config)
     config = apply_batch_to_image_config(config)
     config.max_records = execution.get("max_records")
     config.concurrency = execution.get("image_concurrency", execution.get("concurrency", 1))

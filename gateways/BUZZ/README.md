@@ -173,6 +173,14 @@ curl https://buzzai.cc/v1/models \
 
 系统启动时可以缓存模型列表，也可以在模型不可用时动态刷新。
 
+## Walmart 流程重试配置
+
+Walmart 的 BUZZ 调用与兔子、MXAPI 共用 ai_gateway.retry_policy.gateway_max_attempts，次数只读取 configs/gateways.yaml 的 gateways.buzz.max_retries。2 表示额外重试两次，含首次最多三轮；0 表示不重试。阶段 retry.max_retries 已删除，retry_delay_seconds 仍控制间隔。错误分类和单轮内协议兼容回退保持原行为。
+
+## Walmart 文本模型接口
+
+当前 `gpt-5.6-luna` 属于 OpenAI/Codex 上游，BUZZ 不支持通过 `/v1/chat/completions` 对它进行流式调用。Walmart 阶段配置为 `stream=false`，`gpt-*` 模型直接走非流式 `/v1/responses`，不会先发送一次必然返回 400 的 Chat Completions 请求。其他模型仍保留 `unsupported_upstream` 兼容回退。
+
 ## 11. 适配器配置建议
 
 ```yaml

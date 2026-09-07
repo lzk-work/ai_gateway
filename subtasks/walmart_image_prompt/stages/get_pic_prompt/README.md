@@ -14,8 +14,8 @@ subtasks/walmart_image_prompt/stages/get_pic_prompt/config.json
 
 读取内容：
 
-- Excel 文件：`input.excel_path`
-- Sheet：`input.sheet_name`
+- Excel 文件：业务总配置 input.excel_path（阶段不再重复配置）。
+- Sheet：业务总配置 input.sheet_name。
 - 提示词模板：`input.prompt_template_path`
 - SKU 列：`columns.task_id`
 - 标题列：`columns.title`
@@ -25,7 +25,7 @@ subtasks/walmart_image_prompt/stages/get_pic_prompt/config.json
 ## 输出
 
 ```text
-subtasks/walmart_image_prompt/stages/get_pic_prompt/output/generated_prompt_tasks.jsonl
+batches/<批次名>/01_get_pic_prompt/generated_prompt_tasks.jsonl
 ```
 
 每一行是一条后续模型调用任务，包含：

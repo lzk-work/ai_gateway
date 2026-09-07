@@ -52,7 +52,6 @@ class WalmartCallPromptModelConfig:
     skip_precheck_failed: bool = True
     skip_success: bool = True
     prompt_override: str | None = None
-    max_retries: int = 2
     retry_delay_seconds: int = 30
     stream: bool = False
     full_outputs_dir: str | None = None
@@ -93,9 +92,9 @@ def find_project_root(path: Path) -> Path:
     raise RuntimeError(f"Cannot find project root from config path: {path}")
 
 
-def load_config(path: str | Path) -> WalmartCallPromptModelConfig:
+def load_config(path: str | Path, *, config_data: dict[str, Any] | None = None) -> WalmartCallPromptModelConfig:
     path = Path(path)
-    data = json.loads(path.read_text(encoding="utf-8-sig"))
+    data = config_data if config_data is not None else json.loads(Path(path).read_text(encoding="utf-8-sig"))
     if "input" in data or "output" in data or "execution" in data:
         project_root = find_project_root(path.resolve())
         execution = data.get("execution", {})
@@ -118,7 +117,6 @@ def load_config(path: str | Path) -> WalmartCallPromptModelConfig:
             "skip_precheck_failed": data.get("skip_precheck_failed", True),
             "skip_success": data.get("resume", {}).get("skip_success", True),
             "prompt_override": data.get("prompt_override"),
-            "max_retries": retry.get("max_retries", 2),
             "retry_delay_seconds": retry.get("retry_delay_seconds", 30),
             "stream": bool(model.get("stream", False)),
             "full_outputs_dir": data.get("output", {}).get("full_outputs_dir"),
@@ -537,13 +535,15 @@ def _call_model(
 ) -> tuple[dict[str, Any], int, str]:
     """Send one model request.
 
-    Primary path is /v1/chat/completions (works for Gemini/Claude upstreams,
-    including the gpt-5.4 alias). If BUZZ rejects the model with
-    `unsupported_upstream` (OpenAI/Codex models like gpt-5.6-luna are not served
-    there), automatically retry on /v1/responses with a converted payload. The
-    Responses API keeps the model's reasoning trace in a separate `reasoning`
-    item, so the final answer arrives clean — no "thinking instead of JSON".
+    GPT/OpenAI/Codex models use /v1/responses directly in non-streaming mode.
+    Other models use /v1/chat/completions and retain the compatibility fallback.
     """
+    model_name = str(payload.get("model") or "").lower()
+    if not config.stream and model_name.startswith("gpt-"):
+        responses_payload = build_responses_payload(payload)
+        response_payload, latency_ms = client.responses_completions(responses_payload)
+        result_text = extract_responses_text(response_payload)
+        return response_payload, latency_ms, result_text
     try:
         if config.stream:
             response_payload, latency_ms, result_text = stream_chat_completions(client, payload)
@@ -593,7 +593,8 @@ def call_one(
     latency_ms: int | None = None
     model_name = model_pool.current_model()
     last_attempt = 1
-    max_attempts = max(config.max_retries + 1, 1)
+    from ai_gateway.retry_policy import gateway_max_attempts
+    max_attempts = gateway_max_attempts(client.gateway)
     for attempt in range(1, max_attempts + 1):
         last_attempt = attempt
         model_name = model_pool.current_model()
@@ -1156,13 +1157,6 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-
-
-
-
-
-
-
 
 
 

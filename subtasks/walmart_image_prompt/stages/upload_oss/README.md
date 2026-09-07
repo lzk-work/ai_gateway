@@ -6,7 +6,7 @@
 
 ## 输入
 
-运行时由批次路径自动覆盖：
+运行时由批次路径自动生成，阶段已移除占位路径。对象模板只在总配置 oss.key_template 修改；阶段保留覆盖行为、列映射、上传分批和续跑选项：
 
 ```text
 batches/<批次名>/04_generate_images/walmart_sub_image_generation_result.xlsx
@@ -61,4 +61,3 @@ D:\Program\Anaconda\python.exe E:\WorkSpace\ai_gateway\subtasks\walmart_image_pr
 - `skipped`：OSS 已存在且配置为不覆盖，下次跳过。
 - `failed`：下次重试。
 - `missing_file`：本地图片不存在，等待图片生成阶段补齐后再重跑。
-

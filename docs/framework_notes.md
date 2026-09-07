@@ -108,7 +108,7 @@ OSS 上传属于业务阶段，不属于通用图片下载脚本。平台级配�
 完整模型返回仍按 SKU 单独保存在：
 
 ```text
-stages/call_prompt_model/output/full_outputs/
+batches/<批次名>/02_call_buzz_model/full_outputs/
 ```
 
 Excel 需要完整结果时，会根据 `full_output_path` 读取对应文件再写入结果表。断点续跑仍然读取轻量日志判断成功记录并跳过。
