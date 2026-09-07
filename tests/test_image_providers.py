@@ -98,6 +98,28 @@ class ProviderTests(unittest.TestCase):
         self.assertEqual(count, 2)
         self.assertEqual(result, payload)
 
+    def test_poll_retries_temporary_query_error_without_resubmitting(self):
+        completed = {"status": "completed", "result": {"data": [{"url": "https://image.test/x"}]}}
+        self.gateway.max_retries = 2
+        with patch.object(self.tuzi, "query", side_effect=[RuntimeError("503 Service Unavailable"), (completed, 1)]) as query:
+            result, count, _ = engine.poll_until_done(self.tuzi, "task_existing", self.cfg)
+        self.assertEqual(result, completed)
+        self.assertEqual(count, 1)
+        self.assertEqual(query.call_count, 2)
+
+    def test_exhausted_query_errors_become_pending_with_same_task_id(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            row, checkpoint = self.worker_setup(tmp)
+            row["task_id"] = "task_existing"
+            self.gateway.max_retries = 2
+            with patch.object(self.tuzi, "query", side_effect=RuntimeError("503 Service Unavailable")) as query, \
+                 patch.object(self.tuzi, "submit") as submit:
+                record = engine.process_one(1, 1, row, {}, self.cfg, self.tuzi, checkpoint)
+            self.assertEqual(record.status, "pending")
+            self.assertEqual(record.task_id, "task_existing")
+            self.assertEqual(query.call_count, 3)
+            submit.assert_not_called()
+
     def worker_setup(self, tmp):
         self.cfg.prompt_mode = "fixed"
         self.cfg.poll_existing_task_id = True

@@ -19,7 +19,7 @@ from openpyxl import load_workbook
 from ai_gateway.clients.mxapi_image_client import MxapiImageClient
 from ai_gateway.clients.image_providers import MxapiImageAdapter, SubmissionUnknown, create_image_adapter
 from ai_gateway.config.loader import load_app_config
-from ai_gateway.retry_policy import gateway_max_attempts
+from ai_gateway.retry_policy import gateway_max_attempts, is_retryable_error
 from ai_gateway.validators.result_validator import extract_json
 
 
@@ -672,11 +672,11 @@ def process_one(
         record.retryable = True
         checkpoint_store.upsert(record)
         return record
-    except PollTimeoutError as exc:
-        # 超时≠失败：保留 task_id，标记 pending，待下次续跑按 task_id 重新查询收敛。
+    except (PollTimeoutError, PollQueryTemporaryError) as exc:
+        # 超时/查询接口临时故障≠任务失败：保留 task_id，待下次续跑继续查询，绝不重新提交。
         record = build_pending_record(row, str(exc), task_id=task_id, submit_latency_ms=submit_latency_ms)
         checkpoint_store.upsert(record)
-        print(f"[{index}/{total}] 轮询超时(保留task_id待续跑) | SKU={sku} | task_id={task_id}", flush=True)
+        print(f"[{index}/{total}] 查询暂未完成(保留task_id待续跑) | SKU={sku} | task_id={task_id}", flush=True)
         return record
     except Exception as exc:
         error_msg = str(exc)
@@ -737,6 +737,28 @@ class PollTimeoutError(RuntimeError):
     """本地轮询超时：仅表示本侧未在 max_wait_seconds 内等到结果，平台侧任务可能已成功。"""
 
 
+class PollQueryTemporaryError(RuntimeError):
+    """查询接口临时故障；任务本身可能仍在执行或已经成功。"""
+
+
+def query_with_retry(client: MxapiImageClient, task_id: str, config: MxapiGenerateImagesConfig) -> tuple[dict[str, Any], int]:
+    """按网关 max_retries 重试临时查询错误；绝不重新提交图片任务。"""
+    max_attempts = gateway_max_attempts(client.gateway)
+    last_error: Exception | None = None
+    for attempt in range(1, max_attempts + 1):
+        try:
+            return client.query(task_id)
+        except Exception as exc:
+            last_error = exc
+            if not is_retryable_error(exc.__class__.__name__, str(exc)):
+                raise
+            if attempt < max_attempts:
+                time.sleep(config.retry_delay_seconds * attempt)
+    raise PollQueryTemporaryError(
+        f"query temporarily unavailable after {max_attempts} attempts; task_id={task_id}: {last_error}"
+    ) from last_error
+
+
 def poll_until_done(client: MxapiImageClient, task_id: str, config: MxapiGenerateImagesConfig) -> tuple[dict[str, Any], int, int]:
     started = time.time()
     poll_count = 0
@@ -744,7 +766,7 @@ def poll_until_done(client: MxapiImageClient, task_id: str, config: MxapiGenerat
     while time.time() - started <= config.max_wait_seconds:
         time.sleep(config.poll_interval_seconds)
         poll_count += 1
-        payload, _ = client.query(task_id)
+        payload, _ = query_with_retry(client, task_id, config)
         last_payload = payload
         result = client.parse_query(payload)
         if result.status == "completed":

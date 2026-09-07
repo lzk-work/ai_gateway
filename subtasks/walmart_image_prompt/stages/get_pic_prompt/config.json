@@ -2,7 +2,7 @@
   "name": "walmart_get_pic_prompt",
   "description": "业务任务 walmart_image_prompt 的第一阶段：读取 Walmart Excel 行数据，并按提示词模板生成模型调用任务。",
   "input": {
-    "prompt_template_path": "subtasks/walmart_image_prompt/prompts/walmart_image_prompt_template.txt"
+    "prompt_template_path": "E:/WorkSpace/ai_gateway/subtasks/walmart_image_prompt/prompts/walmart_image_prompt_template.txt"
   },
   "columns": {
     "task_id": "SKU",

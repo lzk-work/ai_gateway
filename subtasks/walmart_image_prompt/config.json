@@ -17,14 +17,14 @@
                 "desired_count":  5
             },
     "input":  {
-                  "excel_path":  "subtasks/walmart_image_prompt/input/end/walmart_flow_1.xlsx",
+                  "excel_path":  "E:/WorkSpace/ai_gateway/subtasks/walmart_image_prompt/input/batch_flow_260905.xlsx",
                   "sheet_name":  "Sheet1"
               },
     "execution":  {
                       "max_records":  1500,
                       "preflight_model":  true,
                       "concurrency":  8,
-                      "image_concurrency":  10,
+                      "image_concurrency":  20,
                       "oss_concurrency":  15
                   },
     "workflow":  {

@@ -27,7 +27,7 @@
 所有附图不能只是产品加普通背景、产品加简单文字、单纯更换场景。必须根据消费者购买心理进行视觉营销设计。每张图片必须包含产品价值表达、场景氛围、视觉层次、信息模块、产品卖点展示、商业摄影效果。目标是提升CTR点击率、页面停留时间、加购率和转化率。
 
 【Walmart图片整体要求】
-所有图片必须为1:1 Square、高清分辨率、2000×2000px以上、商业级摄影质量。视觉风格为欧美商业摄影、Premium Ecommerce Style、Realistic Product Photography、High Detail Texture。禁止Logo、水印、二维码、价格、折扣标签、Buy Now、Best Seller、No.1、虚假认证。
+所有图片必须为1:1 Square、高清分辨率、商业级摄影质量。视觉风格为欧美商业摄影、Premium Ecommerce Style、Realistic Product Photography、High Detail Texture。禁止Logo、水印、二维码、价格、折扣标签、Buy Now、Best Seller、No.1、虚假认证。
 
 【文案合规要求】
 图片文字必须简短、真实、通用表达、基于产品特点。禁止品牌词、商标词、竞品名称、Official、Genuine、Certified、Original、Best、No.1、Guaranteed。推荐使用Durable、Premium、Convenient、Easy、Reliable、Compact Design、Everyday Use。
@@ -80,7 +80,6 @@ Even if product information contains dimensions, do not display any size informa
 Walmart Image Requirement:
 Create a 1:1 square ecommerce image.
 Use high resolution commercial product photography style.
-Minimum recommended resolution: 2000x2000 pixels.
 Ensure the image follows Walmart listing image standards.
 Text Compliance Requirement:
 Any text in the image must avoid trademarked words, brand names, competitor names, copyrighted terms, and unauthorized claims.

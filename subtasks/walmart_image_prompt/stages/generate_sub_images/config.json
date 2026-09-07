@@ -27,7 +27,7 @@
     "download_timeout_seconds": 60
   },
   "retry": {
-    "max_download_retries": 2,
+    "max_download_retries": 3,
     "retry_delay_seconds": 5
   },
   "resume": {

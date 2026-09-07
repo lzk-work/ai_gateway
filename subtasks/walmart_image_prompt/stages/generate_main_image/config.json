@@ -3,7 +3,7 @@
   "description": "主图固定提示词生成：读取 new_main_{sku} 入参，调用总配置选定的平台 生成主图并下载。",
   "execution": {
     "model": {
-      "name": "gpt-image-2",
+      "name": "gpt-image-2-1k",
       "aspect_ratio": "1:1",
       "quality": "low",
       "resolution": "1K"
