@@ -89,6 +89,17 @@ class ConfigurationTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 workflow.load_stage_data(workflow.GET_PROMPT_CONFIG)
 
+    def test_batch_stats_uses_desired_count_not_candidate_count(self):
+        from scripts.statistics import batch_stats
+        config = {
+            "image_selection": {
+                "desired_count": 5,
+                "image_type_order": ["main", "sub1", "sub2", "sub3", "sub4", "sub5"],
+            }
+        }
+        with patch.object(batch_stats, "load_task_config", return_value=config):
+            self.assertEqual(batch_stats.image_count_settings(), (6, 5))
+
     def test_all_loaders_and_batch_override(self):
         for path, module in ((workflow.GET_PROMPT_CONFIG, prompts), (workflow.CALL_MODEL_CONFIG, buzz),
                              (workflow.GENERATE_MAIN_CONFIG, images), (workflow.UPLOAD_OSS_CONFIG, oss)):

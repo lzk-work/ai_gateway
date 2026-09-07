@@ -9,7 +9,7 @@ from typing import Any
 
 from openpyxl import load_workbook
 
-from workflow_common import batch_name_from_input, batch_paths
+from workflow_common import batch_name_from_input, batch_paths, load_task_config
 
 from ai_gateway.subtasks.walmart_call_prompt_model import inspect_result_text
 from ai_gateway.subtasks.mxapi_generate_images import is_completed_success
@@ -17,6 +17,16 @@ from final_image_result import preview_final_image_result_from_logs
 
 
 IMAGE_COUNT = 6
+
+
+def image_count_settings() -> tuple[int, int]:
+    """Return configured candidate rows and the actual per-SKU image target."""
+    selection = load_task_config().get("image_selection", {})
+    order = selection.get("image_type_order") or []
+    candidate_count = len(order) or IMAGE_COUNT
+    desired = selection.get("desired_count", candidate_count)
+    desired_count = desired if isinstance(desired, int) and desired > 0 else candidate_count
+    return candidate_count, min(desired_count, candidate_count)
 
 
 def read_jsonl(path: Path) -> list[dict[str, Any]]:
@@ -83,6 +93,7 @@ def model_success_is_valid(row: dict[str, Any]) -> tuple[bool, str | None]:
 def collect_stats(batch_name: str | None = None) -> dict[str, Any]:
     effective_batch = batch_name or batch_name_from_input()
     paths = batch_paths(effective_batch)
+    candidate_count, desired_count = image_count_settings()
 
     prompt_rows = read_jsonl(paths["prompt_tasks"])
     model_rows = read_jsonl(paths["model_results"])
@@ -111,7 +122,8 @@ def collect_stats(batch_name: str | None = None) -> dict[str, Any]:
     model_pending_skus = source_skus - set(model_by_sku)
     model_failed_skus = source_skus - valid_model_skus - model_pending_skus
 
-    expected_image_count = len(valid_model_skus) * IMAGE_COUNT
+    expected_image_count = len(valid_model_skus) * desired_count
+    expected_candidate_count = len(valid_model_skus) * candidate_count
     all_image_input_keys = {
         image_row_key(row)
         for row in image_input_rows
@@ -120,7 +132,7 @@ def collect_stats(batch_name: str | None = None) -> dict[str, Any]:
     expected_image_keys = {
         f"{sku}::new_sub{index}_{sku}"
         for sku in valid_model_skus
-        for index in range(1, IMAGE_COUNT + 1)
+        for index in range(1, candidate_count + 1)
     }
 
     image_by_key = {
@@ -130,12 +142,21 @@ def collect_stats(batch_name: str | None = None) -> dict[str, Any]:
     }
     image_status_counts = Counter(str(row.get("status") or "unknown") for row in image_by_key.values())
     image_success_keys = {key for key, row in image_by_key.items() if is_completed_success(row)}
+    image_success_by_sku = Counter(key.split("::", 1)[0] for key in image_success_keys)
     image_success_missing_local = [
         key
         for key, row in image_by_key.items()
         if row.get("status") == "success" and not is_completed_success(row)
     ]
-    image_pending = len(expected_image_keys - image_success_keys)
+    image_pending = sum(
+        max(desired_count - image_success_by_sku.get(sku, 0), 0)
+        for sku in valid_model_skus
+    )
+    image_complete_skus = sum(
+        image_success_by_sku.get(sku, 0) >= desired_count
+        for sku in valid_model_skus
+    )
+    image_untracked = len(expected_image_keys - set(image_by_key))
 
     upload_by_key = {
         row_key(row): row
@@ -156,15 +177,18 @@ def collect_stats(batch_name: str | None = None) -> dict[str, Any]:
         "batch_name": effective_batch,
         "batch_root": str(paths["root"]),
         "sku_total": len(source_skus),
-        "theoretical_image_total": len(source_skus) * IMAGE_COUNT,
+        "candidate_image_count": candidate_count,
+        "desired_image_count": desired_count,
+        "theoretical_image_total": len(source_skus) * desired_count,
         "precheck_failed_skus": len(precheck_failed),
-        "precheck_failed_images": len(precheck_failed) * IMAGE_COUNT,
+        "precheck_failed_images": len(precheck_failed) * desired_count,
         "model_valid_skus": len(valid_model_skus),
         "model_pending_skus": len(model_pending_skus),
         "model_failed_skus": len(model_failed_skus),
-        "model_failed_images": len(model_failed_skus) * IMAGE_COUNT,
+        "model_failed_images": len(model_failed_skus) * desired_count,
         "model_invalid_examples": invalid_model_rows[:10],
         "expected_image_count": expected_image_count,
+        "expected_candidate_count": expected_candidate_count,
         "image_input_rows": len(image_input_rows),
         "image_input_duplicate_count": len(image_input_rows) - len(all_image_input_keys),
         "image_input_extra_count": len(all_image_input_keys - expected_image_keys),
@@ -172,6 +196,8 @@ def collect_stats(batch_name: str | None = None) -> dict[str, Any]:
         "image_tracked_count": len(image_by_key),
         "image_status_counts": dict(image_status_counts),
         "image_real_success_count": len(image_success_keys),
+        "image_complete_sku_count": image_complete_skus,
+        "image_untracked_count": image_untracked,
         "image_success_missing_local_count": len(image_success_missing_local),
         "image_success_missing_local_examples": image_success_missing_local[:10],
         "image_pending_count": image_pending,
@@ -202,8 +228,9 @@ def print_batch_stats(batch_name: str | None = None) -> None:
     )
     print(
         "图片: "
-        f"理论应生成={stats['theoretical_image_total']} | "
-        f"当前可生成={stats['expected_image_count']} | "
+        f"理论目标={stats['theoretical_image_total']}（每SKU {stats['desired_image_count']}张） | "
+        f"当前目标={stats['expected_image_count']} | "
+        f"候选上限={stats['expected_candidate_count']}（每SKU {stats['candidate_image_count']}行） | "
         f"03入参行={stats['image_input_rows']} | "
         f"03入参重复={stats['image_input_duplicate_count']} | "
         f"03入参多余={stats['image_input_extra_count']} | "
@@ -212,9 +239,14 @@ def print_batch_stats(batch_name: str | None = None) -> None:
     print(
         "03生成下载: "
         f"成功={stats['image_real_success_count']} | "
+        f"达标SKU={stats['image_complete_sku_count']}/{stats['model_valid_skus']} | "
         f"已提交={image_counts.get('submitted', 0)} | "
+        f"等待查询={image_counts.get('pending', 0)} | "
         f"失败={image_counts.get('failed', 0)} | "
-        f"待处理/重试={stats['image_pending_count']}"
+        f"依赖未满足={image_counts.get('blocked', 0)} | "
+        f"主动跳过={image_counts.get('skipped', 0)} | "
+        f"尚无记录={stats['image_untracked_count']} | "
+        f"真实待补={stats['image_pending_count']}"
     )
     if stats["image_success_missing_local_count"]:
         print(
@@ -234,7 +266,7 @@ def print_batch_stats(batch_name: str | None = None) -> None:
     print(
         "06最终结果: "
         f"SKU={stats['final_result_sku_count']} | "
-        f"6张完整SKU={stats['final_result_complete_sku_count']}"
+        f"达到{stats['desired_image_count']}张SKU={stats['final_result_complete_sku_count']}"
     )
 
     if stats["precheck_failed_skus"]:
