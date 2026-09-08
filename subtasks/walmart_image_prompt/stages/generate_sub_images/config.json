@@ -21,9 +21,9 @@
     "task_id": "task_id"
   },
   "limits": {
-    "poll_interval_seconds": 5,
-    "max_wait_seconds": 300,
-    "submit_delay_seconds": 1.5,
+    "poll_interval_seconds": 10,
+    "max_wait_seconds": 600,
+    "submit_delay_seconds": 1,
     "download_timeout_seconds": 60
   },
   "retry": {

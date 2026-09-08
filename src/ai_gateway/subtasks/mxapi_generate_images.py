@@ -822,11 +822,20 @@ def poll_until_done(client: MxapiImageClient, task_id: str, config: MxapiGenerat
     started = time.time()
     poll_count = 0
     last_payload: dict[str, Any] = {}
+    last_query_error: PollQueryTemporaryError | None = None
     while time.time() - started <= config.max_wait_seconds:
         time.sleep(config.poll_interval_seconds)
         poll_count += 1
-        payload, _ = query_with_retry(client, task_id, config)
+        try:
+            payload, _ = query_with_retry(client, task_id, config)
+        except PollQueryTemporaryError as exc:
+            # A complete retry batch failing only means the query endpoint is
+            # temporarily unavailable. Keep polling the same task ID for the
+            # full task-level wait window instead of ending this run early.
+            last_query_error = exc
+            continue
         last_payload = payload
+        last_query_error = None
         result = client.parse_query(payload)
         if result.status == "completed":
             return payload, poll_count, int(time.time() - started)
@@ -834,7 +843,8 @@ def poll_until_done(client: MxapiImageClient, task_id: str, config: MxapiGenerat
             # 真实错误在 error_msg 字段（部分服务返回 error），一并兼容读取
             error_msg = result.error or "task failed"
             raise TaskFailedError(error_msg)
-    raise PollTimeoutError(f"poll timeout after {config.max_wait_seconds}s: {last_payload}")
+    detail = str(last_query_error) if last_query_error else str(last_payload)
+    raise PollTimeoutError(f"poll timeout after {config.max_wait_seconds}s: {detail}")
 
 
 def collect_image_urls(payload: dict[str, Any]) -> list[str]:

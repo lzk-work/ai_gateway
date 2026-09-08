@@ -30,7 +30,7 @@
   },
   "retry": {
     "max_download_retries": 5,
-    "retry_delay_seconds": 5
+    "retry_delay_seconds": 10
   },
   "resume": {
     "skip_success": true,
