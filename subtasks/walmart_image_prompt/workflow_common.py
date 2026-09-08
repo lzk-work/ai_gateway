@@ -62,7 +62,7 @@ def image_gateway_contract() -> dict[str, str]:
     """Protocol endpoints are code, not per-stage user settings."""
     provider = image_provider()
     submit, query = {
-        "tuzi": ("/async/v1/images/generations", "/get-async"),
+        "tuzi": ("/v1/videos", "/v1/videos"),
         "mxapi": ("/api/v2/gpt-image-2", "/api/v2/gpt-image/task"),
     }[provider]
     return {"name": provider, "endpoint_submit": submit, "endpoint_query": query}

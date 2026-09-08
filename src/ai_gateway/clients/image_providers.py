@@ -1,5 +1,9 @@
 """Platform-specific async image contracts; no routing or business rules here."""
+from contextlib import ExitStack
 from dataclasses import dataclass, field
+import mimetypes
+from pathlib import Path
+import time
 from urllib.parse import urlparse
 
 import requests
@@ -64,77 +68,90 @@ class MxapiImageAdapter(MxapiImageClient):
 class TuziImageAdapter(MxapiImageClient):
     provider = "tuzi"
 
-    def __init__(self, gateway, submit_endpoint="/async/v1/images/generations", query_endpoint="/get-async"):
+    def __init__(self, gateway, submit_endpoint="/v1/videos", query_endpoint="/v1/videos"):
         super().__init__(gateway, submit_endpoint, query_endpoint)
 
     def build_payload(self, prompt, reference_image, config):
         size = config.size or {"1:1": "1024x1024", "3:2": "1536x1024", "2:3": "1024x1536"}.get(config.aspect_ratio)
         if not size or (not config.size and config.resolution.upper() != "1K"):
             raise ImageProtocolError("Tuzi requires an explicit supported size for this aspect_ratio/resolution")
-        if size not in {"auto", "1024x1024", "1536x1024", "1024x1536"}:
+        if size not in {"auto", "1024x1024", "1536x1024", "1024x1536", "2048x2048"}:
             raise ImageProtocolError(f"Unsupported Tuzi size: {size}")
         if config.quality not in {"auto", "low", "medium", "high"}:
             raise ImageProtocolError(f"Unsupported Tuzi quality: {config.quality}")
-        return {"model": config.model, "prompt": prompt, "image": [reference_image],
-                "size": size, "quality": config.quality, "n": 1,
-                "output_format": "png", "response_format": "url"}
+        references = list(reference_image) if isinstance(reference_image, (list, tuple)) else [reference_image]
+        references = [str(item).strip() for item in references if str(item).strip()]
+        return {"model": config.model, "prompt": prompt,
+                "input_reference": references, "size": size}
+
+    def submit(self, payload):
+        """Submit TUZI's multipart image task; repeated input_reference supports multiple URLs/files."""
+        parts = [
+            ("model", (None, str(payload["model"]))),
+            ("prompt", (None, str(payload["prompt"]))),
+            ("size", (None, str(payload["size"]))),
+        ]
+        with ExitStack() as stack:
+            for reference in payload.get("input_reference", []):
+                parsed = urlparse(reference)
+                if parsed.scheme in {"http", "https"} and parsed.netloc:
+                    parts.append(("input_reference", (None, reference)))
+                else:
+                    path = Path(reference)
+                    handle = stack.enter_context(path.open("rb"))
+                    content_type = mimetypes.guess_type(path.name)[0] or "application/octet-stream"
+                    parts.append(("input_reference", (path.name, handle, content_type)))
+            started = time.perf_counter()
+            response = requests.post(
+                self.gateway.base_url.rstrip("/") + self.submit_endpoint,
+                headers={**self.auth_headers(), "Accept": "application/json"},
+                files=parts,
+                timeout=self.gateway.timeout_seconds,
+            )
+            latency_ms = int((time.perf_counter() - started) * 1000)
+        if response.status_code >= 400:
+            raise RuntimeError(f"HTTP {response.status_code}: {response.text[:1000]}")
+        return response.json(), latency_ms
 
     def parse_submit(self, payload):
-        task_id = payload.get("id")
+        task_id = payload.get("task_id") or payload.get("id")
         if not isinstance(task_id, str) or not task_id.strip():
             raise SubmissionUnknown("Tuzi submit response missing async id")
         return task_id
 
     def query(self, task_id):
-        import time
         started = time.perf_counter()
-        response = requests.get(self.gateway.base_url.rstrip("/") + self.query_endpoint,
-                                headers={**self.auth_headers(), "Accept": "application/json"},
-                                params={"id": task_id}, timeout=self.gateway.timeout_seconds)
-        response.raise_for_status()
+        headers = {**self.auth_headers(), "Accept": "application/json"}
+        response = requests.get(
+            self.gateway.base_url.rstrip("/") + self.query_endpoint.rstrip("/") + f"/{task_id}",
+            headers=headers,
+            timeout=self.gateway.timeout_seconds,
+        )
+        if response.status_code >= 400:
+            raise RuntimeError(f"HTTP {response.status_code}: {response.text[:1000]}")
         return response.json(), int((time.perf_counter() - started) * 1000)
 
     def parse_query(self, payload):
         if not isinstance(payload, dict):
             raise ImageProtocolError("Tuzi query response must be an object")
         status = payload.get("status")
-        if status in {"queued", "not_start", "submitted", "in_progress"}:
+        if status in {"queued", "not_start", "submitted", "in_progress", "expired"}:
             return ImagePollResult("pending")
         if status in {"failure", "failed"}:
             return ImagePollResult("failed", error=str(payload.get("error") or payload.get("message") or "Tuzi task failed"))
-        if status == "expired":
-            raise ImageProtocolError("Tuzi result expired; verify upstream before creating another task")
         if status != "completed":
             raise ImageProtocolError(f"Unknown Tuzi async status: {status!r}")
-        code = payload.get("status_code", 200)
-        if not isinstance(code, int) or not 200 <= code < 300:
-            raise ImageProtocolError(f"Tuzi inner HTTP status: {code}; inspect saved task before retry")
-        result = payload.get("result")
-        if not isinstance(result, dict) or result.get("error"):
-            raise ImageProtocolError("Tuzi completed response has invalid/error result")
-        data = result.get("data")
-        if not isinstance(data, list) or not data:
-            raise ImageProtocolError("Tuzi completed response contains no result.data items")
-        urls: list[str] = []
-        b64_images: list[str] = []
-        for item in data:
-            url = item.get("url") if isinstance(item, dict) else None
-            if isinstance(url, str) and urlparse(url).scheme in {"https", "http"} and urlparse(url).netloc:
-                urls.append(url)
-            b64_json = item.get("b64_json") if isinstance(item, dict) else None
-            if isinstance(b64_json, str) and b64_json.strip():
-                b64_images.append(b64_json)
-        if not urls and not b64_images:
-            raise ImageProtocolError("Tuzi result contains neither HTTP image URL nor Base64 image data")
-        if len(urls) > 1:
-            print(f"警告: TUZI 请求 n=1，但返回 {len(urls)} 张图片；将按顺序尝试下载。", flush=True)
-        if b64_images and not urls:
-            print("警告: TUZI 未返回图片 URL，将使用 b64_json 保存图片。", flush=True)
-        return ImagePollResult("completed", list(dict.fromkeys(urls)), b64_images=b64_images)
+        video_url = payload.get("video_url")
+        if isinstance(video_url, str) and urlparse(video_url).scheme in {"https", "http"} and urlparse(video_url).netloc:
+            return ImagePollResult("completed", [video_url])
+        raise ImageProtocolError("Tuzi /v1/videos completed response has no valid video_url")
 
 
 def create_image_adapter(provider, gateway, submit_endpoint, query_endpoint):
     cls = {"mxapi": MxapiImageAdapter, "tuzi": TuziImageAdapter}.get(provider)
     if cls is None:
         raise ValueError(f"Unsupported image provider: {provider}")
+    if provider == "tuzi":
+        # TUZI's active protocol is owned by its adapter.
+        return cls(gateway)
     return cls(gateway, submit_endpoint, query_endpoint)

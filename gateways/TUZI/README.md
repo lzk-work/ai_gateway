@@ -1,6 +1,6 @@
 # 兔子 TUZI：异步图片生成
 
-更新：2026-09-04。本文区分项目实现、真实测试和未验证能力，以免将文生图成功当作完整业务验收。
+更新：2026-09-08。本文以当前 `/v1/videos` 图片异步协议和实测结果为准。
 
 ## 配置和代码
 
@@ -13,44 +13,39 @@
 
 ## 当前采用的协议
 
-提交：`POST /async/v1/images/generations`，JSON 示例：
+提交：`POST /v1/videos`，请求体为 `multipart/form-data`。URL 和本地文件都使用同名的 `input_reference` 字段；重复该字段即可传多图。示意：
 
-```json
-{
-  "model": "gpt-image-2",
-  "prompt": "保持参考商品外观，生成干净背景的产品摄影",
-  "image": ["https://example.com/reference.png"],
-  "size": "1024x1024",
-  "quality": "low",
-  "n": 1,
-  "output_format": "png",
-  "response_format": "url"
-}
+```text
+model=gpt-image-2-1k
+prompt=保持参考商品外观，生成干净背景的产品摄影
+input_reference=https://example.com/reference-1.png
+input_reference=https://example.com/reference-2.png
+size=1024x1024
 ```
 
-这是当前业务适配器构造的请求。`image` 参考图效果尚未真实验证；本次接口测试只发送文本提示词，未带参考图。
+当前业务参考图是 URL，因此直接作为 multipart 文本 part 提交，不需要先下载。本地路径则作为文件 part 上传。
 
-实测提交返回 HTTP 202：
+实测提交返回 HTTP 200：
 
 ```json
 {"id": "task_example", "status": "queued"}
 ```
 
-查询：`GET /get-async?id=task_example`，使用相同平台鉴权。成功响应的关键结构如下（已精简，任务 ID 和 URL 为占位符）：
+查询：`GET /v1/videos/task_example`，使用相同平台鉴权。成功响应的关键结构如下：
 
 ```json
 {
   "id": "task_example",
   "status": "completed",
-  "status_code": 200,
-  "content_type": "application/json; charset=utf-8",
-  "result": {
-    "created": 1788514634,
-    "data": [{"revised_prompt": "...", "url": "https://example.com/result.png"}],
-    "usage": {}
-  }
+  "object": "video",
+  "model": "gpt-image-2-1k",
+  "status": "completed",
+  "progress": 100,
+  "video_url": "https://example.com/result.png"
 }
 ```
+
+新旧协议的 task_id 外观相同但后台渠道不通用。当前流程不会自动回查 `/get-async`，也不允许在同一批次混用两套协议；新批次的提交与查询始终配套使用 `/v1/videos`。旧接口仅保留为未来人工评估的整体备用方案。
 
 ## 解析和恢复规则
 
@@ -59,23 +54,22 @@
 | 提交 `id` | 必须是非空字符串；缺失视为提交结果未知 |
 | `queued / not_start / submitted / in_progress` | 等待，继续查询 |
 | `failure / failed` | 明确任务失败 |
-| `expired` 或未知状态 | 报错，不假定成功，保留已获得的任务 ID |
-| `completed` | 检查 `status_code` 和 `result.data` 后才能成功 |
-| `status_code` | 存在时须是 2xx 整数；当前实现缺失时默认 200 |
-| 图片结果 | `result` 须为无 error 的对象，`data` 恰好一项，`url` 须为 HTTP(S) URL |
-| Base64 | 当前业务不支持，报错而不是误记成功 |
+| `expired` | 视为查询端暂时不可用，继续使用原 task_id 轮询至阶段总等待上限 |
+| 未知状态 | 报协议错误，不假定成功，保留已获得的任务 ID |
+| `completed` | 必须包含合法的 HTTP(S) `video_url` |
+| 图片结果 | 从 `video_url` 下载并校验非空图片文件 |
 
 提交前先落盘 submission_unknown 意图，获得任务 ID 后写入 submitted。兔子提交重试只读取 configs/gateways.yaml 的 gateways.tuzi.max_retries：2 表示首次失败后再重试两次，共最多三次；0 表示只提交一次，不读取阶段 retry.max_submit_retries。重试间隔仍由阶段 retry.retry_delay_seconds 控制。
 
 提交异常或未取得 ID 时有限重试，耗尽后记为可续跑的 failed，继续处理其他图片。进程中断留下的 submission_unknown 在下次运行时告警并重新尝试。不清理旧记录。此策略优先推进流程，可能重复生成、重复扣费；目前未按鉴权、余额、参数等错误进一步区分提交重试资格。
 
-查询超时不等于任务失败：保留 ID，续跑继续查询。明确失败的任务可能按共享执行器既有规则重提，但不会切换到 MXAPI。平台与批次保护见 [目录说明](../README.md)。
+查询超时不等于任务失败：HTTP 410/503、网络临时异常以及 HTTP 200 响应中的 `status=expired` 都不会触发重新提交；程序继续使用原 task_id，在阶段 `max_wait_seconds` 总窗口内轮询。总窗口耗尽后保留 ID，续跑继续查询。明确失败的任务可能按共享执行器既有规则重提，但不会切换到 MXAPI。平台与批次保护见 [目录说明](../README.md)。
 
 ## 参数范围（当前适配器）
 
-- 固定 `n=1`、`output_format=png`、`response_format=url`，不支持通过阶段配置改变这三个值。
-- `quality`：`auto / low / medium / high`。
-- 可在 `execution.model.size` 显式设置 `auto / 1024x1024 / 1536x1024 / 1024x1536`。
+- 当前 multipart 请求传递 `model / prompt / input_reference / size`；模型档位由模型名（如 `gpt-image-2-1k`）确定。
+- `input_reference` 支持 URL、本地文件和重复字段多图。
+- 可在 `execution.model.size` 显式设置 `auto / 1024x1024 / 1536x1024 / 1024x1536 / 2048x2048`。
 - 未设置 size 时，仅允许 `resolution=1K`，按 `aspect_ratio` 映射：`1:1 → 1024x1024`、`3:2 → 1536x1024`、`2:3 → 1024x1536`。
 - 不支持的比例、尺寸组合会在提交前报错，不静默降级。
 
@@ -83,7 +77,7 @@
 
 2026-09-04 使用用户授权的临时 Token，各提交一次 `gpt-image-2` 文生图；相同提示词，均指定 `size=1024x1024`、`quality=low`、`n=1`、PNG、URL 输出。Token 未写入项目。
 
-| 对比 | 当前图片异步接口 | 原生 `/v1/videos` 接口 |
+| 对比 | 旧图片异步接口（仅历史兼容） | 当前 `/v1/videos` 接口 |
 |---|---|---|
 | 提交 | `/async/v1/images/generations` | `/v1/videos` |
 | 提交 HTTP | 202 | 200 |
@@ -94,14 +88,12 @@
 | 实际字节数 | 1,137,508 | 1,318,921 |
 | 图片读取与完整性校验 | 通过 | 通过 |
 
-结论：两者本次均可生图。继续采用图片异步接口：与现有解析器兼容，且本次遵循请求尺寸。`/v1/videos` 虽返回 `object=video` 和 `video_url`，实际内容是 PNG，但本次尺寸与请求不一致；它没有接入当前运行配置，不能仅改端点就复用当前解析器。
-
-这不是稳定性、性能或价格评测。未验证：参考图遵循程度、多图、高质量、其他尺寸、长期成功率和最终账单。下一步应验证带参考图的单张 Walmart 主图，不能据此直接认定整条业务已线上验收。
+2026-09-08 使用 `gpt-image-2-1k`、URL 参考图、5 并发完成 10 个真实任务：10/10 提交、查询和 PNG 下载成功，查询错误为 0，单任务端到端耗时 46.4–67.5 秒。因此当前业务切换为 `/v1/videos`；旧接口不再参与运行，也不自动用于历史 task_id 查询。该样本证明当前参数和并发可用，但不等同于长期 SLA。
 
 ## 官方资料
 
-- [异步创建图像](https://tuzi-api.apifox.cn/478893088e0)
-- [查询异步任务](https://tuzi-api.apifox.cn/372533615e0)
+- [创建图片任务](https://tuzi-api.apifox.cn/472418522e0)
+- [查询图片任务](https://tuzi-api.apifox.cn/472418529e0)
 - [统一异步任务协议](https://api.tu-zi.com/docs/use-cases/async-tasks)
 - [原生视频任务协议](https://api.tu-zi.com/docs/api/video)
 

@@ -17,7 +17,7 @@
                 "desired_count":  5
             },
     "input":  {
-                  "excel_path":  "E:/WorkSpace/ai_gateway/subtasks/walmart_image_prompt/input/batch_flow_260907_2.xlsx",
+                  "excel_path":  "E:/WorkSpace/ai_gateway/subtasks/walmart_image_prompt/input/batch_flow_260905.xlsx",
                   "sheet_name":  "Sheet1"
               },
     "execution":  {

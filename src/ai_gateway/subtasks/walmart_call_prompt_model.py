@@ -411,6 +411,12 @@ def completed_sku_ids(rows: list[dict[str, Any]]) -> set[str]:
 
 
 def is_completed_row(row: dict[str, Any]) -> bool:
+    error_message = str(row.get("error_message") or "")
+    if is_reference_image_unavailable_error(error_message):
+        # A dead upstream reference URL cannot recover by repeating the same
+        # model request. Keep the failure record as a terminal result so batch
+        # resumes do not repeatedly spend requests on it.
+        return True
     full_output_path = row.get("full_output_path")
     if full_output_path:
         path = Path(full_output_path)
@@ -426,6 +432,11 @@ def is_completed_row(row: dict[str, Any]) -> bool:
     ):
         return False
     return True
+
+
+def is_reference_image_unavailable_error(message: str) -> bool:
+    text = str(message or "")
+    return "参考图片失效" in text or "failed to download file" in text or "Error while downloading file" in text
 
 
 def merge_result_rows(
@@ -1172,7 +1183,6 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-
 
 
 

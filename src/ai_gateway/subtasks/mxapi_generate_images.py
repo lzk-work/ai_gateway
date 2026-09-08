@@ -251,6 +251,22 @@ def run(config: MxapiGenerateImagesConfig) -> list[ImageGenerationRecord]:
     rows = apply_checkpoint_to_rows(rows, existing_records)
     completed = completed_keys(existing_records) if config.skip_success else set()
     pending_rows = [row for row in rows if row_key(row) not in completed]
+    if config.skip_success and config.desired_count:
+        success_count_by_sku: dict[str, int] = {}
+        for saved in existing_records:
+            if not is_completed_success(saved):
+                continue
+            sku = str(saved.get("sku") or "").strip()
+            if sku:
+                success_count_by_sku[sku] = success_count_by_sku.get(sku, 0) + 1
+        # Exclude the unused fallback candidates of already-complete SKUs before
+        # max_records is applied. Otherwise those rows can consume the SKU limit
+        # and starve genuinely incomplete SKUs forever on every resumed run.
+        pending_rows = [
+            row
+            for row in pending_rows
+            if success_count_by_sku.get(str(row.get("sku") or "").strip(), 0) < config.desired_count
+        ]
     if config.max_records and config.max_records > 0:
         pending_rows = limit_rows_by_sku(pending_rows, config.max_records)
 

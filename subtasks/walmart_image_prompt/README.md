@@ -6,7 +6,7 @@
 
 根配置 `config.json` 的 `image_provider` 统一控制主图与副图：`tuzi` 为主用，`mxapi` 为手动备用。不会自动回退，也不会在同一批次混用平台。
 
-兔子使用异步提交与任务 ID 查询，需要配置 TUZI_API_KEY。切换平台须使用新输入批次，旧 MXAPI 产物与 checkpoint 不会迁移；已有旧批次时，启动检查会拒绝跨平台续跑。文生图真实异步响应已验证，参考图仍待小样本验收。
+兔子使用 `POST /v1/videos` multipart 异步提交和 `GET /v1/videos/{task_id}` 查询，需要配置 TUZI_API_KEY。URL/文件参考图与重复字段多图均受适配器支持；2026-09-08 已用 `gpt-image-2-1k`、URL 参考图完成 5 并发 10/10 实测。切换平台须使用新输入批次，MXAPI 与 TUZI 不会在同一批次混用。
 
 接口、异常恢复及验收边界见 [生图平台设计](../../docs/image_provider_design.md)。主图、副图阶段仅保留有效参数，网关与重复路径已删除；各项应该在哪里修改见 [配置归属](CONFIGURATION.md)。
 
