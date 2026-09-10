@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import base64
 import binascii
+import builtins
 import json
 import re
 import shutil
@@ -23,6 +24,15 @@ from ai_gateway.clients.image_providers import MxapiImageAdapter, SubmissionUnkn
 from ai_gateway.config.loader import load_app_config
 from ai_gateway.retry_policy import gateway_max_attempts, is_retryable_error
 from ai_gateway.validators.result_validator import extract_json
+
+
+_CONSOLE_LOCK = threading.RLock()
+
+
+def print(*args, **kwargs) -> None:
+    """Serialize console writes from SKU workers to prevent mixed/blank lines."""
+    with _CONSOLE_LOCK:
+        builtins.print(*args, **kwargs)
 
 
 @dataclass(slots=True)
@@ -57,6 +67,8 @@ class MxapiGenerateImagesConfig:
     max_permanent_retries: int = 3
     max_download_retries: int = 2
     retry_delay_seconds: int = 5
+    query_attempts_per_cycle: int = 3
+    query_retry_delay_seconds: float = 5.0
     skip_success: bool = True
     poll_existing_task_id: bool = True
     image_type_order: list[str] = field(default_factory=list)
@@ -64,6 +76,7 @@ class MxapiGenerateImagesConfig:
     require_success_results_path: str | None = None
     provider: str = "mxapi"
     size: str | None = None
+    deferred_async: bool = False
 
 
 @dataclass(slots=True)
@@ -134,8 +147,11 @@ def load_config(path: str | Path, *, config_data: dict[str, Any] | None = None) 
         max_permanent_retries=int(retry.get("max_permanent_retries", 3)),
         max_download_retries=int(retry.get("max_download_retries", 2)),
         retry_delay_seconds=int(retry.get("retry_delay_seconds", 5)),
+        query_attempts_per_cycle=int(retry.get("query_attempts_per_cycle", 3)),
+        query_retry_delay_seconds=float(retry.get("query_retry_delay_seconds", 5.0)),
         skip_success=bool(resume.get("skip_success", True)),
         poll_existing_task_id=bool(resume.get("poll_existing_task_id", True)),
+        deferred_async=bool(resume.get("deferred_async", False)),
     )
     config.prompt_mode = str(data.get("prompt_mode", "buzz")).strip().lower()
     config.prompt_column = str(data.get("prompt_column", "生成提示词")).strip()
@@ -214,7 +230,7 @@ class RowProgress:
 
     _STATUS_TEXT = {
         "success": "成功",
-        "pending": "超时待定",
+        "pending": "查询未确定",
         "skipped": "跳过",
         "failed_permanent": "永久失败",
         "failed": "失败",
@@ -234,6 +250,9 @@ class RowProgress:
             print(f"[进度 {self.done}/{self.total} 行] SKU={sku} | {text}", flush=True)
 
 def run(config: MxapiGenerateImagesConfig) -> list[ImageGenerationRecord]:
+    # Deferred batch/query cycles are currently a TUZI-only behavior. MXAPI
+    # remains the synchronous fallback even though both stages share config.
+    config.deferred_async = bool(config.deferred_async and config.provider == "tuzi")
     app_config = load_app_config(config.gateways_path, config.models_path)
     gateway_config = app_config.gateways[config.gateway]
     client = create_image_adapter(config.provider, gateway_config, config.submit_endpoint, config.query_endpoint)
@@ -251,6 +270,8 @@ def run(config: MxapiGenerateImagesConfig) -> list[ImageGenerationRecord]:
     rows = apply_checkpoint_to_rows(rows, existing_records)
     completed = completed_keys(existing_records) if config.skip_success else set()
     pending_rows = [row for row in rows if row_key(row) not in completed]
+    local_success_count = len(rows) - len(pending_rows)
+    completed_sku_candidate_count = 0
     if config.skip_success and config.desired_count:
         success_count_by_sku: dict[str, int] = {}
         for saved in existing_records:
@@ -262,11 +283,13 @@ def run(config: MxapiGenerateImagesConfig) -> list[ImageGenerationRecord]:
         # Exclude the unused fallback candidates of already-complete SKUs before
         # max_records is applied. Otherwise those rows can consume the SKU limit
         # and starve genuinely incomplete SKUs forever on every resumed run.
+        before_complete_sku_filter = len(pending_rows)
         pending_rows = [
             row
             for row in pending_rows
             if success_count_by_sku.get(str(row.get("sku") or "").strip(), 0) < config.desired_count
         ]
+        completed_sku_candidate_count = before_complete_sku_filter - len(pending_rows)
     if config.max_records and config.max_records > 0:
         pending_rows = limit_rows_by_sku(pending_rows, config.max_records)
 
@@ -296,12 +319,19 @@ def run(config: MxapiGenerateImagesConfig) -> list[ImageGenerationRecord]:
     elif require_path:
         print(f"依赖主图成功: 主图结果文件不存在({require_path})，不施加依赖跳过", flush=True)
 
-    print(f"\n=== {config.provider.upper()} 图片生成阶段 ===", flush=True)
+    phase_name = "异步图片提交/查询阶段" if config.deferred_async else "图片生成阶段"
+    print(f"\n=== {config.provider.upper()} {phase_name} ===", flush=True)
+    sku_count = count_skus(rows)
+    target_count = desired_result_count(rows, config.desired_count)
+    print(f"候选输入: {len(rows)} 行 / {sku_count} 个 SKU", flush=True)
     print(
-        f"图片任务总数: {len(rows)} 行 / {count_skus(rows)} 个 SKU | "
-        f"已成功跳过: {len(rows) - len(pending_rows) - len(blocked_records)} 行 | "
-        f"依赖未满足(跳过): {len(blocked_records)} 行 | "
-        f"本次待处理: {len(pending_rows)} 行 / {count_skus(pending_rows)} 个 SKU "
+        f"最终目标: {target_count} 张 | 本地已成功(不重复处理): {local_success_count} 张 | "
+        f"达标SKU剩余候选(不处理): {completed_sku_candidate_count} 行",
+        flush=True,
+    )
+    print(
+        f"依赖未满足: {len(blocked_records)} 行 | "
+        f"本轮进入处理: {len(pending_rows)} 行 / {count_skus(pending_rows)} 个 SKU "
         f"(max_records={config.max_records} 个 SKU)",
         flush=True,
     )
@@ -389,6 +419,26 @@ def count_skus(rows: list[dict[str, Any]]) -> int:
     return len({str(row.get("sku") or "").strip() for row in rows if str(row.get("sku") or "").strip()})
 
 
+def desired_result_count(rows: list[dict[str, Any]], desired_count: int | None) -> int:
+    """Return actual target files, distinct from the number of fallback rows."""
+    candidates_by_sku: dict[str, int] = {}
+    for row in rows:
+        sku = str(row.get("sku") or "").strip()
+        if sku:
+            candidates_by_sku[sku] = candidates_by_sku.get(sku, 0) + 1
+    return sum(
+        min(candidate_count, desired_count) if desired_count else candidate_count
+        for candidate_count in candidates_by_sku.values()
+    )
+
+
+def sku_target_count(config: MxapiGenerateImagesConfig, sku_rows: list[dict[str, Any]]) -> int:
+    """Target for the whole SKU, never derived from only its remaining rows."""
+    if config.prompt_mode == "fixed":
+        return 1
+    return int(config.desired_count) if config.desired_count else len(sku_rows)
+
+
 def limit_rows_by_sku(rows: list[dict[str, Any]], max_records: int | None) -> list[dict[str, Any]]:
     """按 SKU 为单位截断：最多保留前 max_records 个 SKU 的全部行。
 
@@ -416,9 +466,12 @@ def completed_keys(rows: list[dict[str, Any]]) -> set[str]:
 
 
 def is_terminal_skippable(row: dict[str, Any]) -> bool:
-    """续跑时可直接跳过的终态：成功 或 已主动跳过（目标张数已满足）。"""
-    if row.get("status") == "skipped":
-        return True
+    """Only a verified local success is permanently skippable.
+
+    A fallback candidate marked ``skipped`` may be needed in a later cycle if
+    one of the previously in-flight tasks fails, so skipped is intentionally
+    recalculated instead of treated as terminal.
+    """
     return is_completed_success(row)
 
 
@@ -539,17 +592,23 @@ def process_rows(
         sku_rows = sorted(sku_rows, key=sort_key)
         records: list[ImageGenerationRecord] = []
         # 重启续跑：该 SKU 已有成功数从 checkpoint 统计（pending_rows 只含未成功行）
-        satisfied = sum(
+        # Count only completed files here. In-flight rows are counted when each
+        # candidate is visited below; pre-counting them would count the first
+        # pending row twice and skip a required candidate.
+        occupied = sum(
             1
             for saved in checkpoint_store.rows()
             if str(saved.get("sku") or "").strip() == sku and saved.get("status") == "success"
         )
+        existing_task_count = sum(1 for row in sku_rows if row.get("task_id"))
+        target = sku_target_count(config, sku_rows)
         print(
-            f"开始处理 SKU={sku} | 已有成功={satisfied} | 目标={config.desired_count or '-'} | 候选行={len(sku_rows)}",
+            f"开始处理 SKU={sku} | 已有成功={occupied} | 已有task_id={existing_task_count} | "
+            f"目标={target} | 候选行={len(sku_rows)}",
             flush=True,
         )
         for position, row in enumerate(sku_rows, start=1):
-            if config.desired_count and satisfied >= config.desired_count:
+            if occupied >= target:
                 # 已满足目标张数：跳过该 SKU 剩余类型行（不生成、不判失败）
                 rec = build_skipped_record(row)
                 records.append(rec)
@@ -571,8 +630,10 @@ def process_rows(
             rec = process_one(position, len(sku_rows), row, prompt_map, config, client, checkpoint_store)
             records.append(rec)
             progress.advance(rec.status, sku)
-            if rec.status == "success":
-                satisfied += 1
+            if rec.status == "success" or (
+                getattr(config, "deferred_async", False) and rec.task_id and rec.status in {"submitted", "pending"}
+            ):
+                occupied += 1
             elif should_pause_sku_after_record(rec):
                 print(
                     f"暂停 SKU={sku} 后续候选 | 当前图片状态未确定 | task_id={rec.task_id or '-'}",
@@ -612,7 +673,9 @@ def process_one(
     sku = row["sku"]
     image_name = row["image_name"]
     image_number = row.get("image_number")
-    print(f"[{index}/{total}] 开始生成 | SKU={sku} | 图片={image_name}", flush=True)
+    existing_task_id = (row.get("task_id") or None) if config.poll_existing_task_id else None
+    action = "查询已有任务" if existing_task_id else "准备提交新任务"
+    print(f"[{index}/{total}] {action} | SKU={sku} | 图片={image_name}", flush=True)
     if config.prompt_mode == "fixed":
         # 固定提示词模式（主图）：直接取输入 Excel 的「生成提示词」列，不走 BUZZ image_plan
         prompt = (row.get("prompt") or "").strip()
@@ -639,13 +702,16 @@ def process_one(
         )
         return record
 
-    task_id = (row.get("task_id") or None) if config.poll_existing_task_id else None
+    task_id = existing_task_id
     submit_latency_ms = None
     try:
         if task_id:
             # 断点续跑：先用原 task_id 轮询，任务已完成则直接复用（覆盖超时/抖动恢复）
             try:
-                poll_result, poll_count, wait_seconds = poll_until_done(client, task_id, config)
+                if getattr(config, "deferred_async", False):
+                    poll_result, poll_count, wait_seconds = query_existing_once(client, task_id, config)
+                else:
+                    poll_result, poll_count, wait_seconds = poll_until_done(client, task_id, config)
             except TaskFailedError as exc:
                 if is_permanent_failure(str(exc)):
                     # 永久失败（内容安全拦截）：允许最多重试 max_permanent_retries 次，避免 AI 幻觉误判直接放弃
@@ -665,13 +731,19 @@ def process_one(
                     flush=True,
                 )
                 task_id, submit_latency_ms = submit_image_row(client, prompt, row, config, checkpoint_store)
-                checkpoint_store.upsert(build_submitted_record(row, task_id, submit_latency_ms))
+                submitted = build_submitted_record(row, task_id, submit_latency_ms)
+                checkpoint_store.upsert(submitted)
                 print(f"[{index}/{total}] 已提交 | SKU={sku} | task_id={task_id}", flush=True)
+                if getattr(config, "deferred_async", False):
+                    return submitted
                 poll_result, poll_count, wait_seconds = poll_until_done(client, task_id, config)
         else:
             task_id, submit_latency_ms = submit_image_row(client, prompt, row, config, checkpoint_store)
-            checkpoint_store.upsert(build_submitted_record(row, task_id, submit_latency_ms))
+            submitted = build_submitted_record(row, task_id, submit_latency_ms)
+            checkpoint_store.upsert(submitted)
             print(f"[{index}/{total}] 已提交 | SKU={sku} | task_id={task_id}", flush=True)
+            if getattr(config, "deferred_async", False):
+                return submitted
             poll_result, poll_count, wait_seconds = poll_until_done(client, task_id, config)
         parsed_result = client.parse_query(poll_result)
         download_path = Path(config.download_dir) / f"{image_name}.png"
@@ -861,6 +933,38 @@ def poll_until_done(client: MxapiImageClient, task_id: str, config: MxapiGenerat
             raise TaskFailedError(error_msg)
     detail = str(last_query_error) if last_query_error else str(last_payload)
     raise PollTimeoutError(f"poll timeout after {config.max_wait_seconds}s: {detail}")
+
+
+def query_existing_once(client: MxapiImageClient, task_id: str, config: MxapiGenerateImagesConfig) -> tuple[dict[str, Any], int, int]:
+    """Query a saved task a bounded number of times in one scheduled cycle.
+
+    The configured maximum is the real query count. Gateway retries are not
+    nested here, otherwise one setting of 5 could silently become 15 calls.
+    """
+    started = time.time()
+    max_attempts = max(int(getattr(config, "query_attempts_per_cycle", 3)), 1)
+    last_detail = "not queried"
+    for attempt in range(1, max_attempts + 1):
+        try:
+            payload, _ = client.query(task_id)
+            result = client.parse_query(payload)
+            last_detail = f"task still {result.status}"
+            if result.status == "completed":
+                return payload, attempt, int(time.time() - started)
+            if result.status == "failed":
+                raise TaskFailedError(result.error or "task failed")
+        except TaskFailedError:
+            raise
+        except Exception as exc:
+            if not is_temporary_query_error(exc):
+                raise
+            last_detail = str(exc)
+        if attempt < max_attempts:
+            time.sleep(max(float(getattr(config, "query_retry_delay_seconds", 5.0)), 0.0))
+    raise PollTimeoutError(
+        f"query not completed after {max_attempts} attempts in this cycle; "
+        f"task_id={task_id}: {last_detail}"
+    )
 
 
 def collect_image_urls(payload: dict[str, Any]) -> list[str]:

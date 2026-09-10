@@ -10,6 +10,7 @@
 | 源 Excel、源 Sheet | 总配置 input |
 | 阶段开关、BUZZ 参考副图数量 | 总配置 workflow |
 | SKU 上限、BUZZ/生图/OSS 并发 | 总配置 execution |
+| 整轮重试开关、间隔、轮数上限 | 总配置 scheduler |
 | 副图类型顺序、目标数量 | 总配置 image_selection |
 | OSS 相对对象路径 | 总配置 oss.key_template |
 | 平台域名、密钥变量、HTTP 超时 | [gateways.yaml](../../configs/gateways.yaml) |
@@ -17,7 +18,7 @@
 | 主图模型、质量、比例、分辨率/尺寸 | [主图阶段](stages/generate_main_image/config.json) execution.model |
 | 副图模型、质量、比例、分辨率/尺寸 | [副图阶段](stages/generate_sub_images/config.json) execution.model |
 | BUZZ/兔子/MXAPI 请求额外重试次数 | gateways.yaml 各平台 max_retries |
-| 生图轮询、等待、下载重试、重试间隔、续跑 | 主图/副图阶段 limits、retry、resume |
+| 单次查询/下载重试、重试间隔、续跑 | 主图/副图阶段 limits、retry、resume |
 | BUZZ 模型、候选、采样、重试、续跑 | [BUZZ 阶段](stages/call_prompt_model/config.json) |
 | 提示词模板、Excel 列映射、预检限制 | [提示词阶段](stages/get_pic_prompt/config.json) |
 | 主图固定提示词文件、模板及列映射 | [主图入参阶段](stages/build_main_image_input/config.json) |
@@ -57,6 +58,12 @@
 ## 运行与兼容
 
 使用业务编号入口：00 总流程，或 01、02、03b、03、05b、05 单阶段。它们先通过 load_stage_data/load_stage_config 组装有效配置，再调用共享执行器。执行前确认也读取相同的有效配置。
+
+TUZI 使用延迟异步模式：第一轮批量提交并保存 task_id，不原地轮询；之后按 `scheduler.interval_seconds`（默认 10800 秒）从 01 开始完整续跑，查询并下载已有任务、补交明确失败或缺失的任务，再增量上传和重建结果。`scheduler.max_cycles` 为 null 时不限轮数，命令行 `--once` 可临时只执行一轮。
+
+主/副图阶段的 `retry.retry_delay_seconds` 控制同一轮内接口或下载重试的等待；`scheduler.interval_seconds` 控制两次完整业务轮次之间的等待。TUZI 延迟异步模式不使用 `poll_interval_seconds/max_wait_seconds` 原地等待，这两个字段仍保留给 MXAPI 即时轮询备用模式。
+
+`retry.query_attempts_per_cycle` 是每一轮中、每个已有 task_id 的查询总次数上限，当前主图和副图均为 3。首次查询仍在排队、返回 expired/410/503 或发生临时网络错误时，等待 `query_retry_delay_seconds`（当前 5 秒）再查询，最多追加两次查询、额外等待 10 秒。其目的只是吸收查询接口和网络抖动，不在本轮等待异步生图完成。达到上限后保留 task_id，等待下一轮。该上限不与 gateways.max_retries 相乘。
 
     python subtasks/walmart_image_prompt/00_full_workflow.py --dry-run
     python -m unittest discover -s tests -p "test_*.py" -q

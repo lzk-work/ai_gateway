@@ -11,7 +11,7 @@ from openpyxl import load_workbook
 
 from workflow_common import batch_name_from_input, batch_paths, load_task_config
 
-from ai_gateway.subtasks.walmart_call_prompt_model import inspect_result_text
+from ai_gateway.subtasks.walmart_call_prompt_model import inspect_result_text, is_reference_image_unavailable_error
 from ai_gateway.subtasks.mxapi_generate_images import is_completed_success
 from final_image_result import preview_final_image_result_from_logs
 
@@ -121,6 +121,11 @@ def collect_stats(batch_name: str | None = None) -> dict[str, Any]:
 
     model_pending_skus = source_skus - set(model_by_sku)
     model_failed_skus = source_skus - valid_model_skus - model_pending_skus
+    model_terminal_failed_skus = {
+        sku for sku in model_failed_skus
+        if is_reference_image_unavailable_error(str(model_by_sku.get(sku, {}).get("error_message") or ""))
+    }
+    model_retryable_skus = model_failed_skus - model_terminal_failed_skus
 
     expected_image_count = len(valid_model_skus) * desired_count
     expected_candidate_count = len(valid_model_skus) * candidate_count
@@ -185,6 +190,8 @@ def collect_stats(batch_name: str | None = None) -> dict[str, Any]:
         "model_valid_skus": len(valid_model_skus),
         "model_pending_skus": len(model_pending_skus),
         "model_failed_skus": len(model_failed_skus),
+        "model_terminal_failed_skus": len(model_terminal_failed_skus),
+        "model_retryable_skus": len(model_retryable_skus),
         "model_failed_images": len(model_failed_skus) * desired_count,
         "model_invalid_examples": invalid_model_rows[:10],
         "expected_image_count": expected_image_count,

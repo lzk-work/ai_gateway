@@ -25,13 +25,13 @@
 可选：07 导出包含主图、副图、标题、五点和 OSS 链接的审核预览 Excel
 ```
 
-03 的副图任务在开启 `generate_main_image` 时依赖同一 SKU 的主图生成成功；主图未成功时，该 SKU 的副图会标记为 `blocked`，避免浪费生图额度。
+主图和副图彼此独立提交、查询和下载；副图不等待同一 SKU 的主图完成。历史 `blocked` 副图记录不是终态，下次运行会自动重新参与处理。
 
 ## 入口文件
 
 | 文件 | 作用 | 是否包含在总流程 |
 | --- | --- | --- |
-| `00_full_workflow.py` | 按根配置开关串联各阶段 | 是 |
+| `00_full_workflow.py` | 按根配置开关串联各阶段，并按 scheduler 周期续跑 | 是 |
 | `01_generate_prompt_tasks.py` | Excel 转 BUZZ 任务 JSONL | 是 |
 | `02_call_buzz_model.py` | 调 BUZZ 并校验 6 项 `image_plan` | 是 |
 | `03b_generate_main_images.py` | 构造并生成优化主图 | 是 |
@@ -57,7 +57,9 @@
 - `execution.oss_concurrency`：OSS 上传并发。
 - `execution.preflight_model`：正式调用 BUZZ 前查询 `/v1/models`。
 - `workflow.buzz_sub_image_count`：除主图外，最多带给 BUZZ 的副图参考数量；当前为 4。
-- `image_selection.desired_count`：最终副图目标数；当前为 6。
+- `image_selection.desired_count`：最终副图目标数；当前为 5。
+- `scheduler.interval_seconds`：整轮重试间隔；当前 10800 秒（3 小时）。
+- `scheduler.enabled`：是否在一轮结束后自动等待并从 01 重新开始；`max_cycles=null` 表示不限制轮数。
 - oss.key_template：主图和副图共用的 OSS 对象 key 规则；无效的 oss.prefix 已删除。
 
 模型参数以阶段配置为准：
@@ -134,9 +136,12 @@ batches/<批次名>/
 ```powershell
 python subtasks/walmart_image_prompt/00_full_workflow.py --dry-run
 python subtasks/walmart_image_prompt/00_full_workflow.py
+python subtasks/walmart_image_prompt/00_full_workflow.py --once
 ```
 
-正式总流程启动后会显示执行前确认；直接回车才继续，输入任意内容会取消。
+正式总流程启动后会显示执行前确认；直接回车才继续，输入任意内容会取消。默认每 3 小时重新执行一轮；`--once` 只跑一轮。
+
+某个阶段遇到临时网络/SSL 异常时，本轮会记录错误并继续执行后面的图片查询、上传和结果构建；下一轮仍从 01 重试，且带阶段错误的轮次不会触发自动完成退出。
 
 分步运行：
 
@@ -169,7 +174,11 @@ python subtasks/walmart_image_prompt/99_batch_stats.py
 
 - 提交成功拿到 `task_id` 后立即写 checkpoint。
 - `success` 记录跳过。
-- `submitted` 或保留 `task_id` 的非永久失败优先继续轮询原任务。
+- TUZI 新任务批量提交并立即保存 `task_id`，本轮不等待生成完成。
+- 下一轮查询 `submitted`/`pending` 的原任务；完成后立即下载，暂未完成或查询临时异常继续保留 ID。
+- 控制台按“下载成功 / 新提交 / 查询未确定 / 明确失败 / 目标已满足跳过”分别统计；查询未确定不再显示为失败。
+- 控制台将“候选输入行数”和“最终目标张数”分开显示；例如 10 个 SKU × 6 个候选为 60 行，但 desired_count=5 时最终目标明确显示为 50 张。
+- SKU 并发日志通过统一输出锁整行打印，避免多个线程产生粘行或异常空行；副图目标始终读取完整目标数，不会按本轮剩余候选数缩小。
 - 确认上游任务永久失败后才重新提交。
 - 没有 `task_id` 的失败记录可重新提交。
 

@@ -1,6 +1,6 @@
 ﻿{
   "name": "generate_sub_images",
-  "description": "读取成功 SKU 的副图入参模板，调用总配置选定的平台 生成图片，轮询结果并下载图片。",
+  "description": "读取成功 SKU 的副图入参模板；TUZI 每轮查询已有任务、下载已完成结果并批量补交缺口。",
   "execution": {
     "model": {
       "name": "gpt-image-2-1k",
@@ -28,10 +28,13 @@
   },
   "retry": {
     "max_download_retries": 5,
+    "query_attempts_per_cycle": 3,
+    "query_retry_delay_seconds": 5,
     "retry_delay_seconds": 5
   },
   "resume": {
     "skip_success": true,
-    "poll_existing_task_id": true
+    "poll_existing_task_id": true,
+    "deferred_async": true
   }
 }

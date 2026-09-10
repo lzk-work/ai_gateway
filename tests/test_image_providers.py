@@ -25,7 +25,8 @@ class ProviderTests(unittest.TestCase):
         self.cfg = SimpleNamespace(model="gpt-image-2", aspect_ratio="1:1", resolution="1K",
                                    size=None, quality="low", provider="tuzi",
                                    max_submit_retries=3, submit_delay_seconds=0,
-                                   retry_delay_seconds=0, max_wait_seconds=2, poll_interval_seconds=0)
+                                   retry_delay_seconds=0, query_retry_delay_seconds=0,
+                                   max_wait_seconds=2, poll_interval_seconds=0)
         self.gateway = GatewayConfig("tuzi", "tuzi", "https://example.test", api_key_value="test-only", max_retries=2)
         self.tuzi = TuziImageAdapter(self.gateway)
         self.mx = MxapiImageAdapter(self.gateway, "/submit", "/query")
@@ -253,6 +254,66 @@ class ProviderTests(unittest.TestCase):
                 resumed = engine.process_one(1, 1, row, {}, self.cfg, self.tuzi, checkpoint)
                 self.assertEqual(resumed.status, "success")
                 self.assertEqual(submit.call_count, 1)
+
+    def test_deferred_async_submit_saves_id_without_polling(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            row, checkpoint = self.worker_setup(tmp)
+            self.cfg.deferred_async = True
+            with patch.object(self.tuzi, "submit", return_value=({"id": "task1"}, 1)) as submit, \
+                 patch.object(self.tuzi, "query") as query:
+                record = engine.process_one(1, 1, row, {}, self.cfg, self.tuzi, checkpoint)
+            self.assertEqual(record.status, "submitted")
+            self.assertEqual(record.task_id, "task1")
+            self.assertEqual(submit.call_count, 1)
+            query.assert_not_called()
+
+    def test_deferred_async_pending_keeps_existing_id_without_resubmit(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            row, checkpoint = self.worker_setup(tmp)
+            row["task_id"] = "task_existing"
+            self.cfg.deferred_async = True
+            with patch.object(self.tuzi, "query", return_value=({"status": "queued"}, 1)), \
+                 patch.object(self.tuzi, "submit") as submit:
+                record = engine.process_one(1, 1, row, {}, self.cfg, self.tuzi, checkpoint)
+            self.assertEqual(record.status, "pending")
+            self.assertEqual(record.task_id, "task_existing")
+            submit.assert_not_called()
+
+    def test_deferred_async_query_attempts_are_a_hard_total_limit(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            row, checkpoint = self.worker_setup(tmp)
+            row["task_id"] = "task_existing"
+            self.cfg.deferred_async = True
+            self.cfg.query_attempts_per_cycle = 3
+            self.cfg.query_retry_delay_seconds = 5
+            with patch.object(self.tuzi, "query", return_value=({"status": "queued"}, 1)) as query, \
+                 patch.object(self.tuzi, "submit") as submit, \
+                 patch.object(engine.time, "sleep") as sleep:
+                record = engine.process_one(1, 1, row, {}, self.cfg, self.tuzi, checkpoint)
+            self.assertEqual(record.status, "pending")
+            self.assertEqual(record.task_id, "task_existing")
+            self.assertEqual(query.call_count, 3)
+            self.assertEqual([call.args[0] for call in sleep.call_args_list], [5, 5])
+            submit.assert_not_called()
+
+    def test_skipped_fallback_is_reconsidered_if_capacity_reopens(self):
+        self.assertFalse(engine.is_terminal_skippable({"status": "skipped"}))
+
+    def test_desired_result_count_distinguishes_candidates_from_target(self):
+        rows = [
+            {"sku": sku, "image_name": f"new_sub{index}_{sku}"}
+            for sku in ("sku1", "sku2")
+            for index in range(1, 7)
+        ]
+        self.assertEqual(len(rows), 12)
+        self.assertEqual(engine.desired_result_count(rows, 5), 10)
+
+    def test_sku_target_does_not_shrink_to_remaining_candidate_rows(self):
+        self.cfg.prompt_mode = "buzz"
+        self.cfg.desired_count = 5
+        self.assertEqual(engine.sku_target_count(self.cfg, [{}, {}]), 5)
+        self.cfg.prompt_mode = "fixed"
+        self.assertEqual(engine.sku_target_count(self.cfg, [{}]), 1)
 
     def test_worker_unknown_is_durable(self):
         with tempfile.TemporaryDirectory() as tmp:

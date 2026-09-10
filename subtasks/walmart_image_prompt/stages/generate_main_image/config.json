@@ -30,10 +30,13 @@
   },
   "retry": {
     "max_download_retries": 5,
+    "query_attempts_per_cycle": 3,
+    "query_retry_delay_seconds": 5,
     "retry_delay_seconds": 10
   },
   "resume": {
     "skip_success": true,
-    "poll_existing_task_id": true
+    "poll_existing_task_id": true,
+    "deferred_async": true
   }
 }

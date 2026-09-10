@@ -52,9 +52,9 @@ size=1024x1024
 | 字段/状态 | 当前代码处理 |
 |---|---|
 | 提交 `id` | 必须是非空字符串；缺失视为提交结果未知 |
-| `queued / not_start / submitted / in_progress` | 等待，继续查询 |
+| `queued / not_start / submitted / in_progress` | 保留 task_id，下一轮继续查询 |
 | `failure / failed` | 明确任务失败 |
-| `expired` | 视为查询端暂时不可用，继续使用原 task_id 轮询至阶段总等待上限 |
+| `expired` | 视为查询端暂时不可用，继续保留原 task_id 到下一轮 |
 | 未知状态 | 报协议错误，不假定成功，保留已获得的任务 ID |
 | `completed` | 必须包含合法的 HTTP(S) `video_url` |
 | 图片结果 | 从 `video_url` 下载并校验非空图片文件 |
@@ -63,7 +63,9 @@ size=1024x1024
 
 提交异常或未取得 ID 时有限重试，耗尽后记为可续跑的 failed，继续处理其他图片。进程中断留下的 submission_unknown 在下次运行时告警并重新尝试。不清理旧记录。此策略优先推进流程，可能重复生成、重复扣费；目前未按鉴权、余额、参数等错误进一步区分提交重试资格。
 
-查询超时不等于任务失败：HTTP 410/503、网络临时异常以及 HTTP 200 响应中的 `status=expired` 都不会触发重新提交；程序继续使用原 task_id，在阶段 `max_wait_seconds` 总窗口内轮询。总窗口耗尽后保留 ID，续跑继续查询。明确失败的任务可能按共享执行器既有规则重提，但不会切换到 MXAPI。平台与批次保护见 [目录说明](../README.md)。
+当前 Walmart 流程采用批量延迟查询：新任务提交并落盘 task_id 后立即处理下一张，不在同一轮等待。后续整轮由业务配置 `scheduler.interval_seconds` 控制（默认 3 小时）；每轮从 01 开始，查询已有任务、下载完成结果、补交缺口，再执行增量上传。HTTP 410/503、网络临时异常以及 HTTP 200 的 `status=expired` 均保留原 task_id，不重新生成；只有平台明确返回 failed 或结果链接确认失效时才允许补交。
+
+每轮对每个 task_id 总共最多查询 3 次。首次查询返回排队、处理中或临时查询异常后等待 `retry.query_retry_delay_seconds`（当前 5 秒），再追加最多两次查询，最长额外等待 10 秒。这里仅用于吸收网络或查询端波动，不在当前轮等待异步生成结束；三次仍未取得明确结果时标记 pending 并保留 task_id，等待下一轮。下载及提交失败仍使用原 `retry_delay_seconds`。
 
 ## 参数范围（当前适配器）
 

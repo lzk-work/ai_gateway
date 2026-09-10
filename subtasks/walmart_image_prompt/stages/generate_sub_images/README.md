@@ -46,7 +46,7 @@ D:\Program\Anaconda\python.exe E:\WorkSpace\ai_gateway\subtasks\walmart_image_pr
 
 - 只处理未成功的行。
 - 已成功行会跳过。
-- 有 `task_id` 的失败行会优先继续轮询。
+- 有 `task_id` 的行会在下一轮优先查询，不会重复提交。
 - 无 task_id 的行按平台提交上限尝试；兔子从网关 max_retries 读取额外重试次数，submission_unknown 续跑会告警并再尝试，可能重复扣费。
 - 每行下载一张生成图。
 
@@ -61,7 +61,7 @@ batches/<批次名>/04_generate_images/image_generation_checkpoint.jsonl
 关键节点会立即落盘：
 
 - 提交成功拿到 `task_id`：立即写入 `status=submitted`。
-- 轮询完成并下载成功：更新为 `status=success`。
+- 后续轮次查询完成并下载成功：更新为 `status=success`。
 - 失败：写入 `status=failed` 和错误摘要。
 
 已成功持久化的 task_id 可用于断点恢复；写盘失败不能保证 ID 已保存。兔子会停止执行，MXAPI 保留旧告警行为。下次运行会读取 checkpoint：

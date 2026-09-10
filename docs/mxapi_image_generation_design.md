@@ -40,7 +40,7 @@ Authorization: Bearer <MXAPI_API_KEY>
 
 `03_generate_and_download_images.py` 先从 BUZZ 校验通过的 `image_plan` 构造每 SKU 6 行入参，再按 `sub1` 至 `sub6` 匹配对应提示词并调用 MXAPI。
 
-当根配置开启 `workflow.generate_main_image` 时，副图阶段要求同一 SKU 在主图结果中已成功；否则对应副图行标记为 `blocked`，不提交 MXAPI。
+Walmart 主图与副图独立执行，副图不再依赖同一 SKU 的主图成功；两类任务可在同一轮分别提交和续跑。
 
 批次产物位于：
 

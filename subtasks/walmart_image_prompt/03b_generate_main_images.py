@@ -21,6 +21,7 @@ from ai_gateway.subtasks.mxapi_generate_images import (
     apply_checkpoint_to_rows,
     completed_keys,
     count_skus,
+    desired_result_count,
     limit_rows_by_sku,
     load_config,
     load_work_rows,
@@ -52,9 +53,16 @@ def main() -> None:
     config.concurrency = execution.get("image_concurrency", execution.get("concurrency", 1))
     records = run(config)
     success_count = sum(1 for item in records if item.status == "success")
+    submitted_count = sum(1 for item in records if item.status == "submitted")
+    pending_count = sum(1 for item in records if item.status == "pending")
+    skipped_count = sum(1 for item in records if item.status == "skipped")
+    failed_count = sum(1 for item in records if item.status in {"failed", "failed_permanent"})
 
     print("\n=== 03b 汇总 ===")
-    print(f"主图任务: {len(records)} | 成功: {success_count} | 失败: {len(records) - success_count}")
+    print(
+        f"本轮记录: {len(records)} | 下载成功: {success_count} | 新提交: {submitted_count} | "
+        f"查询未确定: {pending_count} | 明确失败: {failed_count} | 目标已满足跳过: {skipped_count}"
+    )
 
 
 def preview() -> None:
@@ -81,11 +89,15 @@ def preview() -> None:
 
     print(f"主图入参: {input_path}")
     print(f"checkpoint: {config.checkpoint_path}")
+    local_success = sum(1 for row in rows if row_key(row) in completed)
+    print(f"主图候选输入: {len(rows)} 行 / {count_skus(rows)} 个 SKU")
     print(
-        f"主图任务总数: {len(rows)} 行 / {count_skus(rows)} 个 SKU | "
-        f"已成功跳过: {len(completed)} 行 | "
-        f"未成功/待处理: {len(pending)} 行 / {count_skus(pending)} 个 SKU | "
-        f"本次将处理: {len(selected)} 行 / {count_skus(selected)} 个 SKU "
+        f"主图最终目标: {desired_result_count(rows, config.desired_count)} 张 | "
+        f"本地已成功(不重复处理): {local_success} 张 | "
+        f"尚未成功/待查询: {len(pending)} 行"
+    )
+    print(
+        f"本轮将处理: {len(selected)} 行 / {count_skus(selected)} 个 SKU "
         f"(max_records={config.max_records} 个 SKU)"
     )
     print(f"提示词模式: {config.prompt_mode} | 网关: {config.gateway} | 模型: {config.model} | 并发: {config.concurrency}")
