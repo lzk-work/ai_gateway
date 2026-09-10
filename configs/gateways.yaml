@@ -10,7 +10,7 @@ gateways:
     max_retries: 2
   buzz:
     type: buzz
-    base_url: https://buzzai.cc
+    base_url: https://api.buzzai.cc
     api_key_env: BUZZ_API_KEY
     auth_header: Authorization
     timeout_seconds: 300
