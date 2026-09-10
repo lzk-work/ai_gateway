@@ -16,8 +16,11 @@
                 ],
                 "desired_count":  5
             },
+    "image_generation":  {
+                              "max_regenerations_per_image":  4
+                          },
     "input":  {
-                  "excel_path":  "E:/WorkSpace/ai_gateway/subtasks/walmart_image_prompt/input/batch_flow_260908_1.xlsx",
+                  "excel_path":  "E:/WorkSpace/ai_gateway/subtasks/walmart_image_prompt/input/batch_flow_260910_1.xlsx",
                   "sheet_name":  "Sheet1"
               },
     "execution":  {
@@ -29,7 +32,7 @@
                   },
     "scheduler":  {
                        "enabled":  true,
-                       "interval_seconds":  7200,
+                       "interval_seconds":  300,
                        "stop_when_complete":  true,
                        "max_cycles":  null
                    },

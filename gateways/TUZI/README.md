@@ -67,6 +67,8 @@ size=1024x1024
 
 每轮对每个 task_id 总共最多查询 3 次。首次查询返回排队、处理中或临时查询异常后等待 `retry.query_retry_delay_seconds`（当前 5 秒），再追加最多两次查询，最长额外等待 10 秒。这里仅用于吸收网络或查询端波动，不在当前轮等待异步生成结束；三次仍未取得明确结果时标记 pending 并保留 task_id，等待下一轮。下载及提交失败仍使用原 `retry_delay_seconds`。
 
+平台明确返回 failed 时才计一次重新生成。业务总配置 `image_generation.max_regenerations_per_image=2` 表示同一图片最多重新生成两次（首次加重生共最多三个任务）；耗尽后写入 `failed_exhausted`，不会在后续定时轮次继续付费提交。
+
 ## 参数范围（当前适配器）
 
 - 当前 multipart 请求传递 `model / prompt / input_reference / size`；模型档位由模型名（如 `gpt-image-2-1k`）确定。

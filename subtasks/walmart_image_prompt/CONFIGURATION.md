@@ -12,6 +12,7 @@
 | SKU 上限、BUZZ/生图/OSS 并发 | 总配置 execution |
 | 整轮重试开关、间隔、轮数上限 | 总配置 scheduler |
 | 副图类型顺序、目标数量 | 总配置 image_selection |
+| 每张图片明确失败后的重新生成上限 | 总配置 image_generation.max_regenerations_per_image |
 | OSS 相对对象路径 | 总配置 oss.key_template |
 | 平台域名、密钥变量、HTTP 超时 | [gateways.yaml](../../configs/gateways.yaml) |
 | 密钥、OSS Bucket/Endpoint、公共前缀 | configs/local.env 或进程环境；参照 [示例](../../configs/local.env.example) |
@@ -64,6 +65,8 @@ TUZI 使用延迟异步模式：第一轮批量提交并保存 task_id，不原�
 主/副图阶段的 `retry.retry_delay_seconds` 控制同一轮内接口或下载重试的等待；`scheduler.interval_seconds` 控制两次完整业务轮次之间的等待。TUZI 延迟异步模式不使用 `poll_interval_seconds/max_wait_seconds` 原地等待，这两个字段仍保留给 MXAPI 即时轮询备用模式。
 
 `retry.query_attempts_per_cycle` 是每一轮中、每个已有 task_id 的查询总次数上限，当前主图和副图均为 3。首次查询仍在排队、返回 expired/410/503 或发生临时网络错误时，等待 `query_retry_delay_seconds`（当前 5 秒）再查询，最多追加两次查询、额外等待 10 秒。其目的只是吸收查询接口和网络抖动，不在本轮等待异步生图完成。达到上限后保留 task_id，等待下一轮。该上限不与 gateways.max_retries 相乘。
+
+`image_generation.max_regenerations_per_image` 当前为 2，表示平台明确判定某张图片生成失败后，最多重新提交 2 次；加上首次生成，该图片最多产生 3 个任务。达到上限后记录为 `failed_exhausted`，后续轮次不再提交。queued、processing、expired、410、503 和查询超时属于结果未确定，不计入重新生成次数。
 
     python subtasks/walmart_image_prompt/00_full_workflow.py --dry-run
     python -m unittest discover -s tests -p "test_*.py" -q

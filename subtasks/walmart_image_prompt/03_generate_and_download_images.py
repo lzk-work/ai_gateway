@@ -57,7 +57,7 @@ def main() -> None:
     submitted_count = sum(1 for item in records if item.status == "submitted")
     pending_count = sum(1 for item in records if item.status == "pending")
     skipped_count = sum(1 for item in records if item.status == "skipped")
-    failed_count = sum(1 for item in records if item.status in {"failed", "failed_permanent"})
+    failed_count = sum(1 for item in records if item.status in {"failed", "failed_permanent", "failed_exhausted"})
 
     print("\n=== 03 汇总 ===")
     print(

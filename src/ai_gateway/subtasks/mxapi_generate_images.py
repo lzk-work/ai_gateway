@@ -77,6 +77,7 @@ class MxapiGenerateImagesConfig:
     provider: str = "mxapi"
     size: str | None = None
     deferred_async: bool = False
+    max_regenerations_per_image: int = 2
 
 
 @dataclass(slots=True)
@@ -167,6 +168,11 @@ def load_config(path: str | Path, *, config_data: dict[str, Any] | None = None) 
             image_type_order = [str(t).strip() for t in selection.get("image_type_order", []) if str(t).strip()]
             dc = selection.get("desired_count")
             desired_count = int(dc) if isinstance(dc, int) and dc > 0 else None
+            generation = total_data.get("image_generation") or {}
+            max_regenerations = int(generation.get("max_regenerations_per_image", 2))
+            if max_regenerations < 0:
+                raise ValueError("image_generation.max_regenerations_per_image must be >= 0")
+            config.max_regenerations_per_image = max_regenerations
         except Exception:
             pass
     config.image_type_order = image_type_order
@@ -233,6 +239,7 @@ class RowProgress:
         "pending": "查询未确定",
         "skipped": "跳过",
         "failed_permanent": "永久失败",
+        "failed_exhausted": "已达重新生成上限",
         "failed": "失败",
         "submitted": "已提交",
         "blocked": "依赖未满足",
@@ -472,7 +479,7 @@ def is_terminal_skippable(row: dict[str, Any]) -> bool:
     one of the previously in-flight tasks fails, so skipped is intentionally
     recalculated instead of treated as terminal.
     """
-    return is_completed_success(row)
+    return row.get("status") == "failed_exhausted" or is_completed_success(row)
 
 
 def is_completed_success(row: dict[str, Any]) -> bool:
@@ -618,7 +625,8 @@ def process_rows(
                 # 续跑命中永久失败：未达重试上限则当作普通失败重新提交（避免 AI 幻觉误判直接放弃）；
                 # 达到 max_permanent_retries 才真正放弃，后续行（后位类型）继续补位。
                 prev_attempts = int(row.get("attempts", 0) or 0)
-                if prev_attempts >= config.max_permanent_retries:
+                permanent_limit = min(config.max_permanent_retries, config.max_regenerations_per_image)
+                if prev_attempts >= permanent_limit:
                     rec = build_permanent_record(row, "已被安全策略拦截，已达重试上限，永久放弃", attempts=prev_attempts)
                     records.append(rec)
                     progress.advance(rec.status, sku)
@@ -726,12 +734,35 @@ def process_one(
                     )
                     return record
                 # 原任务确认彻底失败（status=failed）→ 丢弃旧 task_id，重新提交生成
+                previous_regenerations = int(row.get("attempts", 0) or 0)
+                if previous_regenerations >= config.max_regenerations_per_image:
+                    record = build_error_record(
+                        row,
+                        "RegenerationLimitReached",
+                        str(exc),
+                        task_id=task_id,
+                    )
+                    record.status = "failed_exhausted"
+                    record.retryable = False
+                    checkpoint_store.upsert(record)
+                    print(
+                        f"[{index}/{total}] 明确失败且已达重新生成上限 | SKU={sku} | "
+                        f"task_id={task_id} | 已重新生成={previous_regenerations}次",
+                        flush=True,
+                    )
+                    return record
                 print(
-                    f"[{index}/{total}] 旧任务失败，重新生成 | SKU={sku} | 旧task_id={task_id} | 原因={short_error(str(exc))}",
+                    f"[{index}/{total}] 旧任务失败，重新生成 "
+                    f"({previous_regenerations + 1}/{config.max_regenerations_per_image}) | "
+                    f"SKU={sku} | 旧task_id={task_id} | 原因={short_error(str(exc))}",
                     flush=True,
                 )
-                task_id, submit_latency_ms = submit_image_row(client, prompt, row, config, checkpoint_store)
-                submitted = build_submitted_record(row, task_id, submit_latency_ms)
+                retry_row = dict(row)
+                retry_row["task_id"] = None
+                retry_row["attempts"] = previous_regenerations + 1
+                task_id, submit_latency_ms = submit_image_row(client, prompt, retry_row, config, checkpoint_store)
+                submitted = build_submitted_record(retry_row, task_id, submit_latency_ms)
+                row = retry_row
                 checkpoint_store.upsert(submitted)
                 print(f"[{index}/{total}] 已提交 | SKU={sku} | task_id={task_id}", flush=True)
                 if getattr(config, "deferred_async", False):
@@ -766,6 +797,7 @@ def process_one(
             submit_latency_ms=submit_latency_ms,
             poll_count=poll_count,
             total_wait_seconds=wait_seconds,
+            attempts=int(row.get("attempts", 0) or 0),
             created_at=datetime.now().isoformat(timespec="seconds"),
         )
         checkpoint_store.upsert(record)
@@ -1067,6 +1099,7 @@ def build_submitted_record(
         submit_latency_ms=submit_latency_ms,
         poll_count=0,
         total_wait_seconds=None,
+        attempts=int(row.get("attempts", 0) or 0),
         created_at=datetime.now().isoformat(timespec="seconds"),
     )
 def build_error_record(

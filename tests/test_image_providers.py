@@ -296,6 +296,28 @@ class ProviderTests(unittest.TestCase):
             self.assertEqual([call.args[0] for call in sleep.call_args_list], [5, 5])
             submit.assert_not_called()
 
+    def test_confirmed_failure_resubmits_only_up_to_configured_limit(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            row, checkpoint = self.worker_setup(tmp)
+            row.update(task_id="failed_task", attempts=1)
+            self.cfg.deferred_async = True
+            self.cfg.max_regenerations_per_image = 2
+            with patch.object(self.tuzi, "query", return_value=({"status": "failed", "error": "upstream failed"}, 1)), \
+                 patch.object(self.tuzi, "submit", return_value=({"id": "replacement_task"}, 1)) as submit:
+                record = engine.process_one(1, 1, row, {}, self.cfg, self.tuzi, checkpoint)
+            self.assertEqual(record.status, "submitted")
+            self.assertEqual(record.task_id, "replacement_task")
+            self.assertEqual(record.attempts, 2)
+            self.assertEqual(submit.call_count, 1)
+
+            row.update(task_id="replacement_task", attempts=2)
+            with patch.object(self.tuzi, "query", return_value=({"status": "failed", "error": "upstream failed"}, 1)), \
+                 patch.object(self.tuzi, "submit") as submit:
+                exhausted = engine.process_one(1, 1, row, {}, self.cfg, self.tuzi, checkpoint)
+            self.assertEqual(exhausted.status, "failed_exhausted")
+            self.assertFalse(exhausted.retryable)
+            submit.assert_not_called()
+
     def test_skipped_fallback_is_reconsidered_if_capacity_reopens(self):
         self.assertFalse(engine.is_terminal_skippable({"status": "skipped"}))
 
