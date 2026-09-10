@@ -11,9 +11,9 @@ BUZZ 是一个兼容 Anthropic Messages API 的 AI 中转站。接入时主要�
 
 ## 2. 基础信息
 
-- Base URL: `https://api.buzzai.cc`（以账户后台当前推荐端点为准）
-- Anthropic Messages endpoint: `POST https://api.buzzai.cc/v1/messages`
-- Models endpoint: `GET https://api.buzzai.cc/v1/models`
+- Base URL: `https://buzzai.cc`（以账户后台当前可用端点为准）
+- Anthropic Messages endpoint: `POST https://buzzai.cc/v1/messages`
+- Models endpoint: `GET https://buzzai.cc/v1/models`
 
 ## 3. 鉴权方式
 
@@ -46,7 +46,7 @@ BUZZ_API_KEY=sk-xxx
 ## 4. 文本调用示例
 
 ```bash
-curl -X POST https://api.buzzai.cc/v1/messages \
+curl -X POST https://buzzai.cc/v1/messages \
   -H "x-api-key: $BUZZ_API_KEY" \
   -H "anthropic-version: 2023-06-01" \
   -H "content-type: application/json" \
@@ -64,7 +64,7 @@ curl -X POST https://api.buzzai.cc/v1/messages \
 BUZZ 兼容 Anthropic Messages API。图片 URL 可作为 image content block 传入，由模型结合提示词返回文本结果。
 
 ```bash
-curl -X POST https://api.buzzai.cc/v1/messages \
+curl -X POST https://buzzai.cc/v1/messages \
   -H "x-api-key: $BUZZ_API_KEY" \
   -H "anthropic-version: 2023-06-01" \
   -H "content-type: application/json" \
@@ -114,7 +114,7 @@ from anthropic import Anthropic
 import os
 
 client = Anthropic(
-    base_url="https://api.buzzai.cc",
+    base_url="https://buzzai.cc",
     api_key=os.environ["BUZZ_API_KEY"],
 )
 
@@ -167,7 +167,7 @@ response.content[0].text
 ## 10. 模型列表
 
 ```bash
-curl https://api.buzzai.cc/v1/models \
+curl https://buzzai.cc/v1/models \
   -H "Authorization: Bearer $BUZZ_API_KEY"
 ```
 
@@ -186,7 +186,7 @@ Walmart 的 BUZZ 调用与兔子、MXAPI 共用 ai_gateway.retry_policy.gateway_
 ```yaml
 buzz:
   type: anthropic_compatible
-  base_url: https://api.buzzai.cc
+  base_url: https://buzzai.cc
   messages_endpoint: /v1/messages
   models_endpoint: /v1/models
   api_key_env: BUZZ_API_KEY

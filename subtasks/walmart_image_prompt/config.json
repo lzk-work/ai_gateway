@@ -26,7 +26,7 @@
     "execution":  {
                       "max_records":  1500,
                       "preflight_model":  true,
-                      "concurrency":  1,
+                      "concurrency":  5,
                       "image_concurrency":  15,
                       "oss_concurrency":  15
                   },

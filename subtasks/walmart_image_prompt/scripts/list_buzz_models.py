@@ -15,7 +15,7 @@ from urllib.request import Request, urlopen
 
 TASK_ROOT = Path(__file__).resolve().parents[1]
 OUTPUT_PATH = TASK_ROOT / "scripts" / "output" / "available_buzz_models.json"
-MODELS_URL = "https://api.buzzai.cc/v1/models"
+MODELS_URL = "https://buzzai.cc/v1/models"
 
 
 def main() -> None:

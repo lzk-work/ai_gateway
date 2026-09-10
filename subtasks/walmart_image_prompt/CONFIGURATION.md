@@ -20,6 +20,7 @@
 | 副图模型、质量、比例、分辨率/尺寸 | [副图阶段](stages/generate_sub_images/config.json) execution.model |
 | BUZZ/兔子/MXAPI 请求额外重试次数 | gateways.yaml 各平台 max_retries |
 | 单次查询/下载重试、重试间隔、续跑 | 主图/副图阶段 limits、retry、resume |
+| BUZZ 请求错峰间隔 | BUZZ 阶段 limits.request_start_interval_seconds；全局限制新请求（含重试）的启动间隔，不降低在途并发上限 |
 | BUZZ 模型、候选、采样、重试、续跑 | [BUZZ 阶段](stages/call_prompt_model/config.json) |
 | 提示词模板、Excel 列映射、预检限制 | [提示词阶段](stages/get_pic_prompt/config.json) |
 | 主图固定提示词文件、模板及列映射 | [主图入参阶段](stages/build_main_image_input/config.json) |

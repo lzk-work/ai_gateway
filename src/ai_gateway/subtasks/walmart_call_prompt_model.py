@@ -34,6 +34,26 @@ EXCEL_FORBIDDEN_CODEPOINTS = {
 }
 
 
+class RequestStartLimiter:
+    """Reserve globally staggered request start slots across worker threads."""
+
+    def __init__(self, interval_seconds: float) -> None:
+        self.interval_seconds = max(float(interval_seconds or 0), 0.0)
+        self._lock = threading.Lock()
+        self._next_start_at = 0.0
+
+    def wait(self) -> None:
+        if self.interval_seconds <= 0:
+            return
+        with self._lock:
+            now = time.monotonic()
+            start_at = max(now, self._next_start_at)
+            self._next_start_at = start_at + self.interval_seconds
+        delay = start_at - now
+        if delay > 0:
+            time.sleep(delay)
+
+
 @dataclass(slots=True)
 class WalmartCallPromptModelConfig:
     name: str
@@ -53,6 +73,7 @@ class WalmartCallPromptModelConfig:
     skip_success: bool = True
     prompt_override: str | None = None
     retry_delay_seconds: int = 30
+    request_start_interval_seconds: float = 0.0
     stream: bool = False
     full_outputs_dir: str | None = None
     source_excel_path: str | None = None
@@ -101,6 +122,7 @@ def load_config(path: str | Path, *, config_data: dict[str, Any] | None = None) 
         model = execution.get("model", {})
         gateway = execution.get("gateway", {})
         retry = data.get("retry", {})
+        limits = data.get("limits", {})
         data = {
             "name": data["name"],
             "input_path": data["input"]["prompt_tasks_path"],
@@ -118,6 +140,7 @@ def load_config(path: str | Path, *, config_data: dict[str, Any] | None = None) 
             "skip_success": data.get("resume", {}).get("skip_success", True),
             "prompt_override": data.get("prompt_override"),
             "retry_delay_seconds": retry.get("retry_delay_seconds", 30),
+            "request_start_interval_seconds": limits.get("request_start_interval_seconds", 0),
             "stream": bool(model.get("stream", False)),
             "full_outputs_dir": data.get("output", {}).get("full_outputs_dir"),
             "source_excel_path": data.get("input", {}).get("source_excel_path"),
@@ -245,10 +268,18 @@ def call_pending_tasks(
         return []
     concurrency = max(int(config.concurrency or 1), 1)
     concurrency = min(concurrency, total_pending)
-    safe_print(f"调用并发: {concurrency}")
+    request_limiter = RequestStartLimiter(config.request_start_interval_seconds)
+    safe_print(
+        f"调用并发: {concurrency} | 请求启动间隔: "
+        f"{config.request_start_interval_seconds:g} 秒"
+    )
     if concurrency == 1:
-        return call_pending_tasks_sequential(pending_tasks, config, client, gateway_name, model_pool)
-    return call_pending_tasks_parallel(pending_tasks, config, client, gateway_name, model_pool, concurrency)
+        return call_pending_tasks_sequential(
+            pending_tasks, config, client, gateway_name, model_pool, request_limiter
+        )
+    return call_pending_tasks_parallel(
+        pending_tasks, config, client, gateway_name, model_pool, concurrency, request_limiter
+    )
 
 
 def call_pending_tasks_sequential(
@@ -257,11 +288,14 @@ def call_pending_tasks_sequential(
     client: OpenAIChatClient,
     gateway_name: str,
     model_pool: RuntimeModelPool,
+    request_limiter: RequestStartLimiter,
 ) -> list[ModelCallRecord]:
     records: list[ModelCallRecord] = []
     total_pending = len(pending_tasks)
     for index, source_task in enumerate(pending_tasks, start=1):
-        record = call_one(index, total_pending, source_task, config, client, gateway_name, model_pool)
+        record = call_one(
+            index, total_pending, source_task, config, client, gateway_name, model_pool, request_limiter
+        )
         records.append(record)
         print_call_done(index, total_pending, record)
     return records
@@ -274,6 +308,7 @@ def call_pending_tasks_parallel(
     gateway_name: str,
     model_pool: RuntimeModelPool,
     concurrency: int,
+    request_limiter: RequestStartLimiter,
 ) -> list[ModelCallRecord]:
     total_pending = len(pending_tasks)
     indexed_tasks = list(enumerate(pending_tasks, start=1))
@@ -281,7 +316,17 @@ def call_pending_tasks_parallel(
     with ThreadPoolExecutor(max_workers=concurrency) as executor:
         futures = {}
         for index, source_task in indexed_tasks:
-            future = executor.submit(call_one, index, total_pending, source_task, config, client, gateway_name, model_pool)
+            future = executor.submit(
+                call_one,
+                index,
+                total_pending,
+                source_task,
+                config,
+                client,
+                gateway_name,
+                model_pool,
+                request_limiter,
+            )
             futures[future] = index
         for future in as_completed(futures):
             index = futures[future]
@@ -585,13 +630,13 @@ def call_one(
     client: OpenAIChatClient,
     gateway_name: str,
     model_pool: RuntimeModelPool,
+    request_limiter: RequestStartLimiter | None = None,
 ) -> ModelCallRecord:
     next_payload = source_task.get("next_task_payload") or {}
     task_id = str(next_payload.get("task_id") or source_task.get("task_id") or "")
     batch_id = str(next_payload.get("batch_id") or source_task.get("batch_id") or "")
     metadata = next_payload.get("metadata") or {}
     sku = metadata.get("sku") or source_task.get("sku")
-    print_call_start(index, total_pending, source_task, model_pool.current_model(), gateway_name)
 
     if config.skip_precheck_failed and next_payload.get("precheck_status") == "failed":
         model_name = model_pool.current_model()
@@ -625,6 +670,10 @@ def call_one(
             image_detail=config.image_detail,
         )
         try:
+            if request_limiter is not None:
+                request_limiter.wait()
+            if attempt == 1:
+                print_call_start(index, total_pending, source_task, model_name, gateway_name)
             response_payload, latency_ms, result_text = _call_model(client, payload, config)
             full_output_path = save_full_output(config, task_id, sku, model_name, result_text)
             json_parseable, image_plan_count, validation_error = inspect_result_text(result_text)
@@ -1183,9 +1232,6 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-
-
-
 
 
 

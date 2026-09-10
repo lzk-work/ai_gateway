@@ -21,6 +21,9 @@
   "retry": {
     "retry_delay_seconds": 30
   },
+  "limits": {
+    "request_start_interval_seconds": 1
+  },
   "resume": {
     "skip_success": true
   }
