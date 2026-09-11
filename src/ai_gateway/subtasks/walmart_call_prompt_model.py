@@ -544,7 +544,7 @@ def normalize_result_row(row: dict[str, Any]) -> dict[str, Any]:
             row_number = (row.get("source_task") or {}).get("row_number")
     else:
         row_number = row.get("row_number")
-    return {
+    normalized = {
         "task_id": row.get("task_id"),
         "batch_id": row.get("batch_id"),
         "sku": row.get("sku"),
@@ -564,6 +564,22 @@ def normalize_result_row(row: dict[str, Any]) -> dict[str, Any]:
         "validation_status": row.get("validation_status", "not_checked"),
         "full_output_path": row.get("full_output_path"),
     }
+    full_output_path = normalized.get("full_output_path")
+    if full_output_path:
+        result_text = read_text_if_exists(full_output_path)
+        if result_text:
+            json_parseable, image_plan_count, validation_error = inspect_result_text(result_text)
+            if validation_error is None:
+                normalized.update(
+                    status="success",
+                    retryable=False,
+                    error_code=None,
+                    error_message=None,
+                    json_parseable=json_parseable,
+                    image_plan_count=image_plan_count,
+                    validation_status="passed",
+                )
+    return normalized
 
 
 def records_from_rows(rows: list[dict[str, Any]]) -> list[ModelCallRecord]:
@@ -1232,7 +1248,6 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-
 
 
 

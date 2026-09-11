@@ -48,6 +48,39 @@ class ConfigurationTests(unittest.TestCase):
             self.assertEqual(call.call_count, retries + 1)
             self.assertEqual(result.status, "failed")
 
+    def test_valid_full_output_repairs_stale_status_and_loads_prompts(self):
+        payload = {
+            "image_plan": [
+                {"image_number": number, "ai_image_generation_prompt": f"prompt {number}"}
+                for number in range(1, 7)
+            ],
+            "global_prompt_restrictions": {"rule": ["keep product accurate"]},
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            full_output = root / "sku.json"
+            full_output.write_text(json.dumps(payload), encoding="utf-8")
+            stale_row = {
+                "task_id": "batch:sku",
+                "sku": "sku",
+                "status": "invalid",
+                "validation_status": "failed",
+                "error_message": "response JSON is not an object",
+                "full_output_path": str(full_output),
+            }
+            model_results = root / "model_results.jsonl"
+            model_results.write_text(json.dumps(stale_row) + "\n", encoding="utf-8")
+
+            normalized = buzz.normalize_result_row(stale_row)
+            self.assertEqual(normalized["status"], "success")
+            self.assertEqual(normalized["validation_status"], "passed")
+            self.assertEqual(normalized["image_plan_count"], 6)
+            self.assertIsNone(normalized["error_message"])
+
+            prompt_map = images.load_prompt_map(model_results)
+            self.assertEqual(set(prompt_map["sku"]), set(range(1, 7)))
+            self.assertIn("prompt 1", prompt_map["sku"][1])
+
     def test_no_duplicate_stage_retry_counts(self):
         for path in (workflow.GENERATE_MAIN_CONFIG, workflow.GENERATE_IMAGES_CONFIG, workflow.CALL_MODEL_CONFIG):
             retry = json.loads(path.read_text(encoding="utf-8-sig")).get("retry", {})

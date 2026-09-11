@@ -528,8 +528,6 @@ def parse_image_number(image_name: str) -> int | None:
 def load_prompt_map(model_results_path: str | Path) -> dict[str, dict[int, str]]:
     prompt_map: dict[str, dict[int, str]] = {}
     for row in read_jsonl_if_exists(model_results_path):
-        if row.get("status") != "success" or row.get("validation_status") != "passed":
-            continue
         sku = row.get("sku")
         full_output_path = row.get("full_output_path")
         if not sku or not full_output_path:
@@ -682,8 +680,6 @@ def process_one(
     image_name = row["image_name"]
     image_number = row.get("image_number")
     existing_task_id = (row.get("task_id") or None) if config.poll_existing_task_id else None
-    action = "查询已有任务" if existing_task_id else "准备提交新任务"
-    print(f"[{index}/{total}] {action} | SKU={sku} | 图片={image_name}", flush=True)
     if config.prompt_mode == "fixed":
         # 固定提示词模式（主图）：直接取输入 Excel 的「生成提示词」列，不走 BUZZ image_plan
         prompt = (row.get("prompt") or "").strip()
@@ -710,6 +706,8 @@ def process_one(
         )
         return record
 
+    action = "查询已有任务" if existing_task_id else "准备提交新任务"
+    print(f"[{index}/{total}] {action} | SKU={sku} | 图片={image_name}", flush=True)
     task_id = existing_task_id
     submit_latency_ms = None
     try:
