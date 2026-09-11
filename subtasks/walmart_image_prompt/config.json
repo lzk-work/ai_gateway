@@ -20,7 +20,7 @@
                               "max_regenerations_per_image":  4
                           },
     "input":  {
-                  "excel_path":  "E:/WorkSpace/ai_gateway/subtasks/walmart_image_prompt/input/batch_flow_260911_1.xlsx",
+                  "excel_path":  "E:/WorkSpace/ai_gateway/subtasks/walmart_image_prompt/input/batch_flow_260910_1.xlsx",
                   "sheet_name":  "Sheet1"
               },
     "execution":  {

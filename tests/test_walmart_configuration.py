@@ -78,7 +78,10 @@ class ConfigurationTests(unittest.TestCase):
         self.assertFalse(normalized["retryable"])
 
         config = workflow.load_stage_config(workflow.CALL_MODEL_CONFIG, buzz.load_config)
-        gateway = workflow.load_app_config().gateways["tuzi_text"]
+        from ai_gateway.config.loader import GatewayConfig
+        gateway = GatewayConfig(
+            "tuzi_text", "tuzi", "https://example.test", api_key_env="TEST_KEY"
+        )
         from ai_gateway.clients.openai_chat_client import OpenAIChatClient
         client = OpenAIChatClient(gateway)
         pool = buzz.RuntimeModelPool(gateway, config.model, [], enabled=False)
