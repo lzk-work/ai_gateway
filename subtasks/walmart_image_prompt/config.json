@@ -40,10 +40,10 @@
                      "buzz_sub_image_count":  4,
                      "generate_prompt_tasks":  true,
                      "call_prompt_model":  true,
-                     "generate_main_image":  false,
-                     "upload_main_image":  false,
-                     "generate_and_download_images":  false,
-                     "upload_oss":  false,
+                     "generate_main_image":  true,
+                     "upload_main_image":  true,
+                     "generate_and_download_images":  true,
+                     "upload_oss":  true,
                      "build_final_result":  true
                  }
 }

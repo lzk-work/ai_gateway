@@ -460,6 +460,7 @@ def display_status(status: str) -> str:
     return {
         "success": "成功",
         "failed": "失败",
+        "failed_permanent": "永久失败",
         "invalid": "校验失败",
         "submitted": "已提交",
     }.get(status, status)
@@ -540,6 +541,8 @@ def completed_sku_ids(rows: list[dict[str, Any]]) -> set[str]:
 
 
 def is_completed_row(row: dict[str, Any]) -> bool:
+    if is_terminal_source_data_error(row):
+        return True
     error_message = str(row.get("error_message") or "")
     if is_reference_image_unavailable_error(error_message):
         # A dead upstream reference URL cannot recover by repeating the same
@@ -566,6 +569,13 @@ def is_completed_row(row: dict[str, Any]) -> bool:
 def is_reference_image_unavailable_error(message: str) -> bool:
     text = str(message or "")
     return "参考图片失效" in text or "failed to download file" in text or "Error while downloading file" in text
+
+
+def is_terminal_source_data_error(row: dict[str, Any]) -> bool:
+    if row.get("status") == "failed_permanent" or row.get("error_code") == "ReferenceImageMissing":
+        return True
+    message = str(row.get("error_message") or "").lower()
+    return row.get("error_code") == "PrecheckFailed" and "missing image url" in message
 
 
 def merge_result_rows(
@@ -648,6 +658,13 @@ def normalize_result_row(row: dict[str, Any]) -> dict[str, Any]:
         "validation_status": row.get("validation_status", "not_checked"),
         "full_output_path": row.get("full_output_path"),
     }
+    if is_terminal_source_data_error(normalized):
+        normalized.update(
+            status="failed_permanent",
+            retryable=False,
+            error_code="ReferenceImageMissing",
+            error_message="参考图片缺失（源数据未提供主图 URL）",
+        )
     full_output_path = normalized.get("full_output_path")
     if full_output_path:
         result_text = read_text_if_exists(full_output_path)
@@ -740,6 +757,20 @@ def call_one(
 
     if config.skip_precheck_failed and next_payload.get("precheck_status") == "failed":
         model_name = model_pool.current_model()
+        precheck_errors = next_payload.get("precheck_errors", [])
+        if any("missing image url" in str(error).lower() for error in precheck_errors):
+            return build_error_record(
+                source_task,
+                task_id,
+                batch_id,
+                sku,
+                gateway_name,
+                model_name,
+                "ReferenceImageMissing",
+                "参考图片缺失（源数据未提供主图 URL）",
+                status="failed_permanent",
+                retryable=False,
+            )
         return build_error_record(
             source_task,
             task_id,
@@ -748,7 +779,7 @@ def call_one(
             gateway_name,
             model_name,
             "PrecheckFailed",
-            json.dumps(next_payload.get("precheck_errors", []), ensure_ascii=False),
+            json.dumps(precheck_errors, ensure_ascii=False),
         )
 
     last_error: Exception | None = None
@@ -957,19 +988,21 @@ def build_error_record(
     error_message: str,
     attempt: int = 1,
     latency_ms: int | None = None,
+    status: str = "failed",
+    retryable: bool | None = None,
 ) -> ModelCallRecord:
     return ModelCallRecord(
         task_id=task_id,
         batch_id=batch_id,
         sku=sku,
-        status="failed",
+        status=status,
         model=model_name,
         gateway=gateway_name,
         request_id=None,
         result_text="",
         latency_ms=latency_ms,
         attempt=attempt,
-        retryable=is_retryable_error_message(error_message),
+        retryable=is_retryable_error_message(error_message) if retryable is None else retryable,
         json_parseable=False,
         image_plan_count=0,
         validation_status="not_checked",
@@ -1344,4 +1377,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

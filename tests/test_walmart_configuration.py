@@ -62,6 +62,40 @@ class ConfigurationTests(unittest.TestCase):
         responses_payload = buzz.build_responses_payload(payload)
         self.assertNotIn("temperature", responses_payload)
 
+    def test_missing_source_image_is_a_terminal_precheck_failure(self):
+        legacy_row = {
+            "task_id": "batch:sku",
+            "sku": "sku",
+            "status": "failed",
+            "retryable": False,
+            "error_code": "PrecheckFailed",
+            "error_message": '["missing image url"]',
+        }
+        self.assertTrue(buzz.is_completed_row(legacy_row))
+        normalized = buzz.normalize_result_row(legacy_row)
+        self.assertEqual(normalized["status"], "failed_permanent")
+        self.assertEqual(normalized["error_code"], "ReferenceImageMissing")
+        self.assertFalse(normalized["retryable"])
+
+        config = workflow.load_stage_config(workflow.CALL_MODEL_CONFIG, buzz.load_config)
+        gateway = workflow.load_app_config().gateways["tuzi_text"]
+        from ai_gateway.clients.openai_chat_client import OpenAIChatClient
+        client = OpenAIChatClient(gateway)
+        pool = buzz.RuntimeModelPool(gateway, config.model, [], enabled=False)
+        source_task = {
+            "task_id": "batch:sku",
+            "sku": "sku",
+            "next_task_payload": {
+                "task_id": "batch:sku",
+                "precheck_status": "failed",
+                "precheck_errors": ["missing image url"],
+            },
+        }
+        with patch.object(buzz, "_call_model", side_effect=AssertionError("must not call provider")):
+            record = buzz.call_one(1, 1, source_task, config, client, "tuzi_text", pool)
+        self.assertEqual(record.status, "failed_permanent")
+        self.assertEqual(record.error_code, "ReferenceImageMissing")
+
     def test_valid_full_output_repairs_stale_status_and_loads_prompts(self):
         payload = {
             "image_plan": [
@@ -148,6 +182,30 @@ class ConfigurationTests(unittest.TestCase):
             return json.dumps(raw) if p == path else original(p, *args, **kwargs)
         with patch.object(Path, "read_text", read), self.assertRaises(ValueError):
             workflow.load_stage_data(path)
+
+    def test_upload_only_batch_does_not_imply_mxapi(self):
+        from ai_gateway.clients.image_batch import check_batch_provider
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "batch"
+            upload_dir = root / "05_upload_oss"
+            upload_dir.mkdir(parents=True)
+            (upload_dir / "final.xlsx").write_bytes(b"placeholder")
+            self.assertEqual(check_batch_provider(root, "tuzi", bind=True), "tuzi")
+            marker = json.loads((root / "image_provider.json").read_text(encoding="utf-8"))
+            self.assertEqual(marker["provider"], "tuzi")
+
+    def test_generation_record_is_authoritative_for_image_provider(self):
+        from ai_gateway.clients.image_batch import check_batch_provider
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "batch"
+            generation_dir = root / "04_generate_images"
+            generation_dir.mkdir(parents=True)
+            (generation_dir / "image_generation_results.jsonl").write_text(
+                json.dumps({"sku": "sku", "provider": "mxapi"}) + "\n",
+                encoding="utf-8",
+            )
+            with self.assertRaises(RuntimeError):
+                check_batch_provider(root, "tuzi")
 
     def test_source_is_required(self):
         with patch.object(workflow, "load_task_config", return_value={"image_provider": "tuzi"}):

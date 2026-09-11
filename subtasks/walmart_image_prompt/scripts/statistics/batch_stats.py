@@ -123,7 +123,11 @@ def collect_stats(batch_name: str | None = None) -> dict[str, Any]:
     model_failed_skus = source_skus - valid_model_skus - model_pending_skus
     model_terminal_failed_skus = {
         sku for sku in model_failed_skus
-        if is_reference_image_unavailable_error(str(model_by_sku.get(sku, {}).get("error_message") or ""))
+        if (
+            model_by_sku.get(sku, {}).get("status") == "failed_permanent"
+            or model_by_sku.get(sku, {}).get("error_code") == "ReferenceImageMissing"
+            or is_reference_image_unavailable_error(str(model_by_sku.get(sku, {}).get("error_message") or ""))
+        )
     }
     model_retryable_skus = model_failed_skus - model_terminal_failed_skus
 
