@@ -1,9 +1,9 @@
 ﻿{
   "name": "walmart_call_prompt_model",
-  "description": "业务任务 walmart_image_prompt 的第二阶段：读取第一阶段生成的任务，调用 BUZZ/OpenAI 兼容接口，校验 JSON，并写出 JSONL 与 Excel 结果。",
+  "description": "业务任务 walmart_image_prompt 的第二阶段：读取第一阶段生成的任务，调用所选 OpenAI 兼容网关，校验 JSON，并写出 JSONL 与 Excel 结果。",
   "execution": {
     "gateway": {
-      "name": "buzz"
+      "name": "tuzi_text"
     },
     "model": {
       "name": "gpt-5.6-luna",
@@ -12,9 +12,9 @@
         "gpt-5.4"
       ],
       "refresh_on_error": true,
-      "stream": true,
+      "stream": false,
       "max_tokens": 12000,
-      "temperature": 0.2,
+      "temperature": null,
       "image_detail": "auto"
     }
   },

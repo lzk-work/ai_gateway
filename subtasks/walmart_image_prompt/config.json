@@ -20,30 +20,30 @@
                               "max_regenerations_per_image":  4
                           },
     "input":  {
-                  "excel_path":  "E:/WorkSpace/ai_gateway/subtasks/walmart_image_prompt/input/batch_flow_260910_1.xlsx",
+                  "excel_path":  "E:/WorkSpace/ai_gateway/subtasks/walmart_image_prompt/input/batch_flow_260911_1.xlsx",
                   "sheet_name":  "Sheet1"
               },
     "execution":  {
                       "max_records":  1500,
                       "preflight_model":  true,
-                      "concurrency":  5,
+                      "concurrency":  8,
                       "image_concurrency":  15,
                       "oss_concurrency":  15
                   },
     "scheduler":  {
                        "enabled":  true,
-                       "interval_seconds":  300,
+                       "interval_seconds":  600,
                        "stop_when_complete":  true,
                        "max_cycles":  null
                    },
     "workflow":  {
                      "buzz_sub_image_count":  4,
                      "generate_prompt_tasks":  true,
-                     "call_buzz_model":  true,
-                     "generate_main_image":  true,
-                     "upload_main_image":  true,
-                     "generate_and_download_images":  true,
-                     "upload_oss":  true,
+                     "call_prompt_model":  true,
+                     "generate_main_image":  false,
+                     "upload_main_image":  false,
+                     "generate_and_download_images":  false,
+                     "upload_oss":  false,
                      "build_final_result":  true
                  }
 }

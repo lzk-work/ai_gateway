@@ -70,6 +70,7 @@ class OpenAIChatClient:
         self, payload: dict[str, Any]
     ) -> tuple[dict[str, Any], int, str]:
         """Consume a Responses API SSE stream and return its normalized result."""
+        provider_label = self.gateway.name.upper()
         url = self.gateway.base_url.rstrip("/") + "/v1/responses"
         stream_payload = dict(payload)
         stream_payload["stream"] = True
@@ -107,7 +108,7 @@ class OpenAIChatClient:
                 try:
                     event = json.loads(data)
                 except json.JSONDecodeError as exc:
-                    raise RuntimeError(f"BUZZ Responses SSE invalid JSON: {data[:300]}") from exc
+                    raise RuntimeError(f"{provider_label} Responses SSE invalid JSON: {data[:300]}") from exc
                 event_type = str(event.get("type") or event_name or "")
                 event_name = None
                 response_data = event.get("response")
@@ -123,17 +124,17 @@ class OpenAIChatClient:
                 elif event_type in {"response.failed", "response.incomplete", "error"}:
                     detail = event.get("error") or response_data or event
                     raise RuntimeError(
-                        f"BUZZ Responses SSE {event_type}: "
+                        f"{provider_label} Responses SSE {event_type}: "
                         f"{json.dumps(detail, ensure_ascii=False)[:1000]}"
                     )
         latency_ms = int((time.perf_counter() - started) * 1000)
         if not completed:
-            raise RuntimeError("BUZZ Responses SSE ended before response.completed")
+            raise RuntimeError(f"{provider_label} Responses SSE ended before response.completed")
         result_text = "".join(text_parts)
         if not result_text and final_response:
             result_text = extract_responses_text(final_response)
         if not result_text.strip():
-            raise RuntimeError("BUZZ Responses SSE completed without output text")
+            raise RuntimeError(f"{provider_label} Responses SSE completed without output text")
         normalized = final_response or {"object": "response", "output": []}
         if not extract_responses_text(normalized):
             normalized = {**normalized, "output_text": result_text}

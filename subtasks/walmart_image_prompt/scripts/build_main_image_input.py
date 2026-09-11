@@ -1,6 +1,6 @@
 ﻿"""Build main-image generation input workbook for every SKU.
 
-与副图不同：主图使用固定提示词（不调用 BUZZ），每个 SKU 仅一行：
+与副图不同：主图使用固定提示词（不调用文本模型），每个 SKU 仅一行：
   - 图片命名 = new_main_{sku}
   - 参考图片链接 = 原主图 URL
   - 生成提示词 = 固定提示词文件内容（prompts/main_image_optimization_prompt.txt）

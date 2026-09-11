@@ -61,7 +61,7 @@ def print_execution_confirmation(dry_run: bool = False) -> bool:
     print(
         "阶段开关: "
         f"01={switches['generate_prompt_tasks']} | "
-        f"02={switches['call_buzz_model']} | "
+        f"02={switches['call_prompt_model']} | "
         f"03b主图={switches['generate_main_image']} | "
         f"03副图={switches['generate_and_download_images']} | "
         f"05b主图OSS={switches['upload_main_image']} | "
@@ -73,15 +73,16 @@ def print_execution_confirmation(dry_run: bool = False) -> bool:
     print_stage_state(switches["generate_prompt_tasks"])
     print(f"输出任务: {paths['prompt_tasks']}")
 
-    print("\n--- 02 BUZZ 文本模型 ---")
-    print_stage_state(switches["call_buzz_model"])
     model = call_config.get("execution", {}).get("model", {})
     gateway = call_config.get("execution", {}).get("gateway", {})
     gateway_name = gateway.get("name", "buzz")
+    print(f"\n--- 02 {gateway_name.upper()} 文本模型 ---")
+    print_stage_state(switches["call_prompt_model"])
     gateway_config = app_config.gateways.get(gateway_name)
     print(f"网关: {gateway_name}")
     if gateway_config:
-        print(f"API: {gateway_config.base_url}{gateway.get('endpoint', '/v1/chat/completions')}")
+        default_endpoint = "/v1/responses" if str(model.get("name", "")).startswith("gpt-") else "/v1/chat/completions"
+        print(f"API: {gateway_config.base_url}{gateway.get('endpoint', default_endpoint)}")
         print(f"Key环境变量: {gateway_config.api_key_env}")
         print(f"HTTP超时: {gateway_config.timeout_seconds}s | 失败重试: {gateway_max_attempts(gateway_config) - 1} 次（含首次最多 {gateway_max_attempts(gateway_config)} 次）")
     print(f"模型: {model.get('name')}")

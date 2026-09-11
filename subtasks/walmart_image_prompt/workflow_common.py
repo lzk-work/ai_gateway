@@ -23,7 +23,7 @@ UPLOAD_OSS_CONFIG = TASK_ROOT / "stages" / "upload_oss" / "config.json"
 BUILD_MAIN_CONFIG = TASK_ROOT / "stages" / "build_main_image_input" / "config.json"
 GENERATE_MAIN_CONFIG = TASK_ROOT / "stages" / "generate_main_image" / "config.json"
 UPLOAD_MAIN_CONFIG = TASK_ROOT / "stages" / "upload_main_image" / "config.json"
-PREFLIGHT_MODELS_OUTPUT = TASK_ROOT / "scripts" / "output" / "available_buzz_models.json"
+PREFLIGHT_MODELS_OUTPUT = TASK_ROOT / "scripts" / "output" / "available_text_models.json"
 BATCHES_ROOT = TASK_ROOT / "batches"
 
 
@@ -144,7 +144,7 @@ def workflow_switches() -> dict[str, bool]:
     workflow = load_task_config().get("workflow", {})
     return {
         "generate_prompt_tasks": bool(workflow.get("generate_prompt_tasks", True)),
-        "call_buzz_model": bool(workflow.get("call_buzz_model", True)),
+        "call_prompt_model": bool(workflow.get("call_prompt_model", True)),
         "generate_and_download_images": bool(workflow.get("generate_and_download_images", False)),
         "upload_oss": bool(workflow.get("upload_oss", False)),
         "generate_main_image": bool(workflow.get("generate_main_image", False)),
@@ -173,12 +173,13 @@ def batch_root(batch_name: str | None = None) -> Path:
 
 def batch_paths(batch_name: str | None = None) -> dict[str, Path]:
     root = batch_root(batch_name)
+    model_root = root / "02_call_prompt_model"
     return {
         "root": root,
         "prompt_tasks": root / "01_get_pic_prompt" / "generated_prompt_tasks.jsonl",
-        "model_results": root / "02_call_buzz_model" / "model_results.jsonl",
-        "full_outputs": root / "02_call_buzz_model" / "full_outputs",
-        "model_excel": root / "02_call_buzz_model" / "walmart_results.xlsx",
+        "model_results": model_root / "model_results.jsonl",
+        "full_outputs": model_root / "full_outputs",
+        "model_excel": model_root / "walmart_results.xlsx",
         "image_input_excel": root / "03_build_image_input" / "walmart_sub_image_input_result.xlsx",
         "image_results": root / "04_generate_images" / "image_generation_results.jsonl",
         "image_checkpoint": root / "04_generate_images" / "image_generation_checkpoint.jsonl",
@@ -324,7 +325,7 @@ def key_fingerprint(value: str) -> str:
     return digest[:12]
 
 
-def preflight_buzz_model(call_config) -> None:
+def preflight_text_model(call_config) -> None:
     from ai_gateway.config.loader import load_app_config
     from ai_gateway.subtasks.walmart_call_prompt_model import fetch_gateway_models
 
@@ -333,25 +334,27 @@ def preflight_buzz_model(call_config) -> None:
     gateway_name = call_config.gateway or app_config.models.get(model_name, {}).get("gateway") or app_config.default_gateway
     gateway = app_config.gateways[gateway_name]
     api_key = gateway.api_key()
+    gateway_label = gateway_name.upper()
+    models_output = PREFLIGHT_MODELS_OUTPUT.with_name(f"available_{gateway_name}_models.json")
     print("\n=== 启动检查 ===")
-    print(f"BUZZ Key: {gateway.api_key_env} ({key_fingerprint(api_key)})")
+    print(f"{gateway_label} Key: {gateway.api_key_env} ({key_fingerprint(api_key)})")
 
     available = fetch_gateway_models(gateway)
     payload = {"object": "list", "data": [{"id": item} for item in available]}
-    PREFLIGHT_MODELS_OUTPUT.parent.mkdir(parents=True, exist_ok=True)
-    PREFLIGHT_MODELS_OUTPUT.write_text(
+    models_output.parent.mkdir(parents=True, exist_ok=True)
+    models_output.write_text(
         json.dumps(payload, ensure_ascii=False, indent=2),
         encoding="utf-8",
     )
 
     print(f"可用模型数: {len(available)}")
-    print(f"模型列表缓存: {PREFLIGHT_MODELS_OUTPUT}")
+    print(f"模型列表缓存: {models_output}")
     configured_models = list(dict.fromkeys([model_name, *call_config.model_candidates]))
     available_candidates = [item for item in configured_models if item in available]
     if not available_candidates:
         sample = ", ".join(str(item) for item in available[:20])
         raise RuntimeError(
-            "No configured model is available for current BUZZ key. "
+            f"No configured model is available for current {gateway_label} key. "
             f"Configured models: {', '.join(configured_models)}. "
             f"Available examples: {sample}"
         )
@@ -363,6 +366,8 @@ def preflight_buzz_model(call_config) -> None:
     call_config.model_candidates = [item for item in call_config.model_candidates if item in available]
     if call_config.model_candidates:
         print(f"可用候选: {', '.join(call_config.model_candidates)}")
+
+
 
 
 def build_current_prompt_task_preview_rows() -> list[dict[str, Any]]:

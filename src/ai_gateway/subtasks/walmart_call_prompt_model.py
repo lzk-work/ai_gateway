@@ -10,7 +10,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 import requests
 
@@ -67,7 +67,7 @@ class WalmartCallPromptModelConfig:
     max_records: int | None = None
     concurrency: int = 1
     max_tokens: int | None = 2500
-    temperature: float = 0.2
+    temperature: float | None = 0.2
     image_detail: str = "auto"
     skip_precheck_failed: bool = True
     skip_success: bool = True
@@ -212,6 +212,65 @@ def fetch_gateway_models(gateway_config) -> list[str]:
     return [str(item.get("id")) for item in payload.get("data", []) if isinstance(item, dict) and item.get("id")]
 
 
+def recover_valid_full_outputs(
+    existing_rows: list[dict[str, Any]],
+    source_tasks: list[dict[str, Any]],
+    config: WalmartCallPromptModelConfig,
+    model_names: list[str],
+    gateway_name: str,
+) -> tuple[list[dict[str, Any]], int]:
+    """Adopt valid per-SKU outputs left behind when a run stopped before its final merge."""
+    if not config.full_outputs_dir:
+        return existing_rows, 0
+    latest_by_task = {
+        str(row.get("task_id")): row
+        for row in existing_rows
+        if row.get("task_id")
+    }
+    recovered: list[dict[str, Any]] = []
+    unique_models = list(dict.fromkeys(str(name) for name in model_names if name))
+    for source_task in source_tasks:
+        task_id = source_task_id(source_task)
+        sku = source_task_sku(source_task)
+        if not task_id or not sku:
+            continue
+        current = latest_by_task.get(task_id)
+        if current and is_completed_row(current):
+            continue
+        safe_sku = "".join(ch if ch.isalnum() or ch in ("-", "_") else "_" for ch in sku)
+        valid_path: Path | None = None
+        valid_model: str | None = None
+        for candidate_model in unique_models:
+            candidate = Path(config.full_outputs_dir) / f"{safe_sku}__{candidate_model}.json"
+            if not candidate.exists():
+                continue
+            text = candidate.read_text(encoding="utf-8", errors="replace")
+            _, _, validation_error = inspect_result_text(text)
+            if validation_error is None:
+                valid_path = candidate
+                valid_model = candidate_model
+                break
+        if valid_path is None:
+            continue
+        next_payload = source_task.get("next_task_payload") or {}
+        recovered_row = {
+            **(current or {}),
+            "task_id": task_id,
+            "batch_id": str(next_payload.get("batch_id") or source_task.get("batch_id") or ""),
+            "sku": sku,
+            "row_number": source_task_row_number(source_task),
+            "model": valid_model,
+            "gateway": gateway_name,
+            "request_id": (current or {}).get("request_id"),
+            "latency_ms": (current or {}).get("latency_ms"),
+            "attempt": (current or {}).get("attempt", 1),
+            "created_at": datetime.fromtimestamp(valid_path.stat().st_mtime).isoformat(timespec="seconds"),
+            "full_output_path": str(valid_path),
+        }
+        recovered.append(normalize_result_row(recovered_row))
+    return [*existing_rows, *recovered], len(recovered)
+
+
 def run(config: WalmartCallPromptModelConfig) -> list[ModelCallRecord]:
     app_config = load_app_config(config.gateways_path, config.models_path)
     model_name = config.model or app_config.default_model
@@ -230,6 +289,17 @@ def run(config: WalmartCallPromptModelConfig) -> list[ModelCallRecord]:
 
     source_tasks = read_jsonl(config.input_path)
     existing_rows = read_jsonl_if_exists(config.output_path)
+    existing_rows, recovered_count = recover_valid_full_outputs(
+        existing_rows,
+        source_tasks,
+        config,
+        [model_name, *config.model_candidates],
+        gateway_name,
+    )
+    if recovered_count:
+        write_jsonl_rows(merge_result_rows(existing_rows, [], source_tasks), config.output_path)
+        existing_rows = read_jsonl_if_exists(config.output_path)
+        safe_print(f"恢复已落盘但未汇总的有效结果: {recovered_count} 条")
     completed_task_ids = completed_ids(existing_rows) if config.skip_success else set()
     completed_skus = completed_sku_ids(existing_rows) if config.skip_success else set()
     pending_tasks = [
@@ -242,10 +312,17 @@ def run(config: WalmartCallPromptModelConfig) -> list[ModelCallRecord]:
     if config.max_records and config.max_records > 0:
         pending_tasks = pending_tasks[: config.max_records]
 
-    print_section("BUZZ 文本模型阶段")
+    print_section(f"{gateway_name.upper()} 文本模型阶段")
     safe_print(f"任务总数: {len(source_tasks)} | 已成功跳过: {skipped_count} | 本次待处理: {len(pending_tasks)}")
 
-    records = call_pending_tasks(pending_tasks, config, client, gateway_name, model_pool)
+    records = call_pending_tasks(
+        pending_tasks,
+        config,
+        client,
+        gateway_name,
+        model_pool,
+        on_record=lambda record: append_jsonl_row(record_to_log_row(record), config.output_path),
+    )
 
     merged_rows = merge_result_rows(existing_rows, records, source_tasks)
     write_jsonl_rows(merged_rows, config.output_path)
@@ -262,6 +339,7 @@ def call_pending_tasks(
     client: OpenAIChatClient,
     gateway_name: str,
     model_pool: RuntimeModelPool,
+    on_record: Callable[[ModelCallRecord], None] | None = None,
 ) -> list[ModelCallRecord]:
     total_pending = len(pending_tasks)
     if total_pending == 0:
@@ -275,10 +353,10 @@ def call_pending_tasks(
     )
     if concurrency == 1:
         return call_pending_tasks_sequential(
-            pending_tasks, config, client, gateway_name, model_pool, request_limiter
+            pending_tasks, config, client, gateway_name, model_pool, request_limiter, on_record
         )
     return call_pending_tasks_parallel(
-        pending_tasks, config, client, gateway_name, model_pool, concurrency, request_limiter
+        pending_tasks, config, client, gateway_name, model_pool, concurrency, request_limiter, on_record
     )
 
 
@@ -289,6 +367,7 @@ def call_pending_tasks_sequential(
     gateway_name: str,
     model_pool: RuntimeModelPool,
     request_limiter: RequestStartLimiter,
+    on_record: Callable[[ModelCallRecord], None] | None = None,
 ) -> list[ModelCallRecord]:
     records: list[ModelCallRecord] = []
     total_pending = len(pending_tasks)
@@ -297,6 +376,8 @@ def call_pending_tasks_sequential(
             index, total_pending, source_task, config, client, gateway_name, model_pool, request_limiter
         )
         records.append(record)
+        if on_record is not None:
+            on_record(record)
         print_call_done(index, total_pending, record)
     return records
 
@@ -309,6 +390,7 @@ def call_pending_tasks_parallel(
     model_pool: RuntimeModelPool,
     concurrency: int,
     request_limiter: RequestStartLimiter,
+    on_record: Callable[[ModelCallRecord], None] | None = None,
 ) -> list[ModelCallRecord]:
     total_pending = len(pending_tasks)
     indexed_tasks = list(enumerate(pending_tasks, start=1))
@@ -332,6 +414,8 @@ def call_pending_tasks_parallel(
             index = futures[future]
             record = future.result()
             results_by_index[index] = record
+            if on_record is not None:
+                on_record(record)
             print_call_done(index, total_pending, record)
     return [results_by_index[index] for index, _ in indexed_tasks if index in results_by_index]
 
@@ -750,7 +834,7 @@ def build_chat_payload(
     prompt_override: str | None,
     model_name: str,
     max_tokens: int | None,
-    temperature: float,
+    temperature: float | None,
     image_detail: str,
 ) -> dict[str, Any]:
     prompt = prompt_override or str(next_payload.get("prompt") or "")
@@ -770,8 +854,9 @@ def build_chat_payload(
     payload: dict[str, Any] = {
         "model": model_name,
         "messages": [{"role": "user", "content": content}],
-        "temperature": temperature,
     }
+    if temperature is not None:
+        payload["temperature"] = temperature
     if max_tokens:
         payload["max_tokens"] = max_tokens
     return payload
@@ -839,7 +924,9 @@ def build_continue_payload(
         {"role": "assistant", "content": previous_text},
         {"role": "user", "content": CONTINUE_PROMPT},
     ]
-    payload = {"model": model_name, "messages": messages, "temperature": temperature}
+    payload = {"model": model_name, "messages": messages}
+    if temperature is not None:
+        payload["temperature"] = temperature
     if max_tokens:
         payload["max_tokens"] = max_tokens
     return payload
@@ -1226,6 +1313,15 @@ def write_jsonl_rows(rows: list[dict[str, Any]], path: str | Path) -> None:
         for row in rows:
             handle.write(json.dumps(row, ensure_ascii=False) + "\n")
 
+
+def append_jsonl_row(row: dict[str, Any], path: str | Path) -> None:
+    """Persist one completed task immediately so an interrupted batch can resume safely."""
+    output = Path(path)
+    output.parent.mkdir(parents=True, exist_ok=True)
+    with output.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(row, ensure_ascii=False) + "\n")
+        handle.flush()
+
 def write_jsonl(records: list[ModelCallRecord], path: str | Path) -> None:
     output = Path(path)
     output.parent.mkdir(parents=True, exist_ok=True)
@@ -1248,9 +1344,4 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-
-
-
-
-
 

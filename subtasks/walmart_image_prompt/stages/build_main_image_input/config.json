@@ -1,6 +1,6 @@
 {
   "name": "build_main_image_input",
-  "description": "根据源 Excel 的 SKU 与原主图，生成主图优化入参（固定提示词模式，不调用 BUZZ）。",
+  "description": "根据源 Excel 的 SKU 与原主图，生成主图优化入参（固定提示词模式，不调用文本模型）。",
   "input": {
     "template_path": "E:/WorkSpace/ai_gateway/subtasks/walmart_image_prompt/templates/sub_image_download_template.xlsx",
     "template_sheet_name": "Sheet1"

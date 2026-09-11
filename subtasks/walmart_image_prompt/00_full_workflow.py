@@ -20,7 +20,7 @@ def run_step(filename: str, dry_run: bool) -> None:
     sys.argv = [filename]
     if dry_run:
         sys.argv.append("--dry-run")
-        if filename == "02_call_buzz_model.py":
+        if filename == "02_call_prompt_model.py":
             sys.argv.append("--preview-current-excel")
     try:
         runpy.run_path(str(TASK_ROOT / filename), run_name="__main__")
@@ -34,7 +34,7 @@ def run_cycle(dry_run: bool) -> dict:
         check_image_provider(bind=not dry_run)
     stages = [
         ("generate_prompt_tasks", "01_generate_prompt_tasks.py", "01 生成提示词任务"),
-        ("call_buzz_model", "02_call_buzz_model.py", "02 调用 BUZZ 模型"),
+        ("call_prompt_model", "02_call_prompt_model.py", "02 调用文本模型"),
         ("generate_main_image", "03b_generate_main_images.py", "03b 生成/查询主图"),
         ("generate_and_download_images", "03_generate_and_download_images.py", "03 生成/查询副图"),
         ("upload_main_image", "05b_upload_main_oss.py", "05b 上传主图 OSS"),

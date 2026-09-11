@@ -15,7 +15,7 @@
 ```text
 商品 Excel
   ├─ 01 组装每个 SKU 的多模态提示词任务
-  ├─ 02 调用 BUZZ，生成并校验 6 张副图方案
+  ├─ 02 调用所选文本模型平台，生成并校验 6 张副图方案
   ├─ 03b 用固定提示词调用选定生图平台，生成 1 张优化主图
   ├─ 03 根据 BUZZ 方案调用选定生图平台，生成 6 张副图
   ├─ 05b 上传生成主图到阿里云 OSS
@@ -33,7 +33,7 @@
 | --- | --- | --- |
 | `00_full_workflow.py` | 按根配置开关串联各阶段，并按 scheduler 周期续跑 | 是 |
 | `01_generate_prompt_tasks.py` | Excel 转 BUZZ 任务 JSONL | 是 |
-| `02_call_buzz_model.py` | 调 BUZZ 并校验 6 项 `image_plan` | 是 |
+| `02_call_prompt_model.py` | 调用所选文本平台并校验 6 项 `image_plan` | 是 |
 | `03b_generate_main_images.py` | 构造并生成优化主图 | 是 |
 | `03_generate_and_download_images.py` | 构造并生成 6 张副图 | 是 |
 | `05b_upload_main_oss.py` | 上传生成主图 | 是 |
@@ -55,7 +55,7 @@
 - `execution.concurrency`：BUZZ 并发。
 - `execution.image_concurrency`：MXAPI 主图和副图并发。
 - `execution.oss_concurrency`：OSS 上传并发。
-- `execution.preflight_model`：正式调用 BUZZ 前查询 `/v1/models`。
+- `execution.preflight_model`：正式调用文本模型前查询所选网关的 `/v1/models`。
 - `workflow.buzz_sub_image_count`：除主图外，最多带给 BUZZ 的副图参考数量；当前为 4。
 - `image_selection.desired_count`：最终副图目标数；当前为 5。
 - `scheduler.interval_seconds`：整轮重试间隔；当前 10800 秒（3 小时）。
@@ -67,7 +67,7 @@
 - BUZZ 首选模型：`gpt-5.6-luna`；候选模型：`gpt-5.4`；`stream=false`；`max_tokens=12000`。
 - MXAPI 模型：`gpt-image-2`；`1:1`、`low`、`1K`。
 
-根配置中的所有流程开关当前均为 true。正式运行会调用 BUZZ、选定生图平台和 OSS，消耗额度/产生上传；执行前应先运行 --dry-run。
+根配置中的所有流程开关当前均为 true。正式运行会调用所选文本平台、生图平台和 OSS，消耗额度/产生上传；执行前应先运行 --dry-run。
 
 ## 输入 Excel
 
@@ -94,7 +94,7 @@ subtasks/walmart_image_prompt/batches/develop_flow_260827/
 batches/<批次名>/
   01_get_pic_prompt/
     generated_prompt_tasks.jsonl
-  02_call_buzz_model/
+  02_call_prompt_model/
     model_results.jsonl
     full_outputs/
     walmart_results.xlsx
@@ -147,7 +147,7 @@ python subtasks/walmart_image_prompt/00_full_workflow.py --once
 
 ```powershell
 python subtasks/walmart_image_prompt/01_generate_prompt_tasks.py --dry-run
-python subtasks/walmart_image_prompt/02_call_buzz_model.py --dry-run
+python subtasks/walmart_image_prompt/02_call_prompt_model.py --dry-run
 python subtasks/walmart_image_prompt/03b_generate_main_images.py --dry-run
 python subtasks/walmart_image_prompt/03_generate_and_download_images.py --dry-run
 python subtasks/walmart_image_prompt/05b_upload_main_oss.py --dry-run
@@ -201,6 +201,8 @@ python subtasks/walmart_image_prompt/99_batch_stats.py
 
 ```text
 BUZZ_API_KEY=...
+TUZI_TEXT_API_KEY=...
+TUZI_API_KEY=...
 MXAPI_API_KEY=...
 ALIYUN_OSS_BUCKET=...
 ALIYUN_OSS_ENDPOINT=...
@@ -209,7 +211,7 @@ ALIYUN_OSS_ACCESS_KEY_SECRET=...
 ALIYUN_OSS_DEFAULT_PREFIX=images
 ```
 
-BUZZ 可用模型可用以下命令刷新查看：
+`TUZI_TEXT_API_KEY` 仅用于步骤 02 文本提示词，`TUZI_API_KEY` 仅用于主图和副图生成。两者必须分别配置。BUZZ 可用模型可用以下命令刷新查看：
 
 ```powershell
 python subtasks/walmart_image_prompt/scripts/list_buzz_models.py
@@ -221,7 +223,7 @@ python subtasks/walmart_image_prompt/scripts/list_buzz_models.py
 
 总流程 `--dry-run` 会读取 Excel 和已有批次产物用于统计，但不会：
 
-- 调用 BUZZ 或 MXAPI；
+- 调用文本模型或图片生成平台；
 - 下载图片；
 - 连接或上传 OSS；
 - 生成或覆盖业务 JSONL、Excel、图片文件。

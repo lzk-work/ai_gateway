@@ -19,7 +19,7 @@ subtasks/walmart_image_prompt/
   prompts/           业务提示词模板
   00_full_workflow.py
   01_generate_prompt_tasks.py
-  02_call_buzz_model.py
+  02_call_prompt_model.py
   03b_generate_main_images.py
   03_generate_and_download_images.py
   05b_upload_main_oss.py
@@ -55,7 +55,7 @@ D:\Program\Anaconda\python.exe E:\WorkSpace\ai_gateway\subtasks\walmart_image_pr
 
 ```powershell
 D:\Program\Anaconda\python.exe E:\WorkSpace\ai_gateway\subtasks\walmart_image_prompt\01_generate_prompt_tasks.py
-D:\Program\Anaconda\python.exe E:\WorkSpace\ai_gateway\subtasks\walmart_image_prompt\02_call_buzz_model.py
+D:\Program\Anaconda\python.exe E:\WorkSpace\ai_gateway\subtasks\walmart_image_prompt\02_call_prompt_model.py
 D:\Program\Anaconda\python.exe E:\WorkSpace\ai_gateway\subtasks\walmart_image_prompt\03_generate_and_download_images.py
 D:\Program\Anaconda\python.exe E:\WorkSpace\ai_gateway\subtasks\walmart_image_prompt\03b_generate_main_images.py
 D:\Program\Anaconda\python.exe E:\WorkSpace\ai_gateway\subtasks\walmart_image_prompt\05_upload_oss.py --dry-run
@@ -91,9 +91,9 @@ subtasks/walmart_image_prompt/config.json
 
 ```text
 subtasks/walmart_image_prompt/batches/<入参文件名>/01_get_pic_prompt/generated_prompt_tasks.jsonl
-subtasks/walmart_image_prompt/batches/<入参文件名>/02_call_buzz_model/model_results.jsonl
-subtasks/walmart_image_prompt/batches/<入参文件名>/02_call_buzz_model/full_outputs/
-subtasks/walmart_image_prompt/batches/<入参文件名>/02_call_buzz_model/walmart_results.xlsx
+subtasks/walmart_image_prompt/batches/<入参文件名>/02_call_prompt_model/model_results.jsonl
+subtasks/walmart_image_prompt/batches/<入参文件名>/02_call_prompt_model/full_outputs/
+subtasks/walmart_image_prompt/batches/<入参文件名>/02_call_prompt_model/walmart_results.xlsx
 subtasks/walmart_image_prompt/batches/<入参文件名>/04b_generate_main_images/downloaded_images/
 subtasks/walmart_image_prompt/batches/<入参文件名>/04_generate_images/downloaded_images/
 subtasks/walmart_image_prompt/batches/<入参文件名>/05b_upload_main_oss/oss_upload_results.jsonl

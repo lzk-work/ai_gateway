@@ -258,7 +258,7 @@ Excel 写回字段建议：
 ```json
 "workflow": {
   "generate_prompt_tasks": true,
-  "call_buzz_model": true,
+  "call_prompt_model": true,
   "generate_and_download_images": true,
   "upload_oss": false
 }

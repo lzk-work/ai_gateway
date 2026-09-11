@@ -20,8 +20,10 @@
 | 副图模型、质量、比例、分辨率/尺寸 | [副图阶段](stages/generate_sub_images/config.json) execution.model |
 | BUZZ/兔子/MXAPI 请求额外重试次数 | gateways.yaml 各平台 max_retries |
 | 单次查询/下载重试、重试间隔、续跑 | 主图/副图阶段 limits、retry、resume |
-| BUZZ 请求错峰间隔 | BUZZ 阶段 limits.request_start_interval_seconds；全局限制新请求（含重试）的启动间隔，不降低在途并发上限 |
-| BUZZ 模型、候选、采样、重试、续跑 | [BUZZ 阶段](stages/call_prompt_model/config.json) |
+| 文本请求错峰间隔 | 文本模型阶段 limits.request_start_interval_seconds；全局限制新请求（含重试）的启动间隔，不降低在途并发上限 |
+| 文本模型平台 | [文本模型阶段](stages/call_prompt_model/config.json) execution.gateway.name；`tuzi_text` 与 `buzz` 整体手动切换，不做单任务自动故障转移 |
+| TUZI 文本/生图密钥 | 文本网关 `tuzi_text` 读取 `TUZI_TEXT_API_KEY`；生图网关 `tuzi` 读取 `TUZI_API_KEY`，两把 Key 相互隔离 |
+| 文本模型、候选、采样、重试、续跑 | [文本模型阶段](stages/call_prompt_model/config.json) |
 | 提示词模板、Excel 列映射、预检限制 | [提示词阶段](stages/get_pic_prompt/config.json) |
 | 主图固定提示词文件、模板及列映射 | [主图入参阶段](stages/build_main_image_input/config.json) |
 | 副图模板及列映射 | [副图入参阶段](stages/build_sub_image_download_input/config.json) |

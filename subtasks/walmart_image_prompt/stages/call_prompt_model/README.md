@@ -2,7 +2,7 @@
 
 所属业务任务：`walmart_image_prompt`。
 
-本阶段读取第一阶段生成的任务，逐个 SKU 调用 BUZZ/OpenAI 兼容接口，并保存校验结果。
+本阶段读取第一阶段生成的任务，逐个 SKU 调用所选 OpenAI 兼容文本平台，并保存校验结果。
 
 ## 输入
 
@@ -23,18 +23,20 @@ subtasks/walmart_image_prompt/stages/call_prompt_model/config.json
 
 本阶段自己的模型和中转站配置写在 `execution` 内，不依赖其他业务任务：
 
-- `execution.gateway.name`：当前为 `buzz`。
+- `execution.gateway.name`：当前为 `tuzi_text`。
 - `execution.model.name`：当前首选 `gpt-5.6-luna`。
 - `execution.model.candidates`：当前候选为 `gpt-5.4`。
-- `execution.model.stream`：当前为 `true`。`gpt-*` 模型走 `/v1/responses` SSE；其他模型走 `/v1/chat/completions` SSE。改为 `false` 时保持相同协议，只切换为完整 JSON 响应。
+- 文本平台当前可用 `tuzi_text` 或 `buzz`；一次运行只使用一个平台。`tuzi_text` 读取 `TUZI_TEXT_API_KEY`，不与生图的 `TUZI_API_KEY` 共用。
+- `execution.model.stream`：当前为 `false`。`gpt-*` 模型走 `/v1/responses`；其他模型走 `/v1/chat/completions`。设为 `true` 时才使用相应协议的 SSE。
 - `execution.model.max_tokens`：当前为 `12000`。
+- `execution.model.temperature`：当前为 `null`，表示不发送该字段；TUZI_TEXT 的 `gpt-5.6-luna` 不接受 `temperature`。切换到支持该参数的平台时可配置数值。
 
 ## 输出
 
 ```text
-batches/<批次名>/02_call_buzz_model/model_results.jsonl
-batches/<批次名>/02_call_buzz_model/full_outputs/
-batches/<批次名>/02_call_buzz_model/walmart_results.xlsx
+batches/<批次名>/02_call_prompt_model/model_results.jsonl
+batches/<批次名>/02_call_prompt_model/full_outputs/
+batches/<批次名>/02_call_prompt_model/walmart_results.xlsx
 ```
 
 保存策略：
@@ -83,8 +85,8 @@ Excel 结果表只保留业务查看需要的核心字段：
 模型、网关、request id、完整原始返回、校验细节等调试信息不写入 Excel，统一保存在：
 
 ```text
-batches/<批次名>/02_call_buzz_model/model_results.jsonl
-batches/<批次名>/02_call_buzz_model/full_outputs/
+batches/<批次名>/02_call_prompt_model/model_results.jsonl
+batches/<批次名>/02_call_prompt_model/full_outputs/
 ```
 
 ## 批量日志瘦身
@@ -107,7 +109,9 @@ batches/<批次名>/02_call_buzz_model/full_outputs/
 完整模型返回仍按 SKU 单独保存在：
 
 ```text
-batches/<批次名>/02_call_buzz_model/full_outputs/
+batches/<批次名>/02_call_prompt_model/full_outputs/
 ```
 
 Excel 需要完整结果时，会根据 `full_output_path` 读取对应文件再写入结果表。断点续跑仍然读取轻量日志判断成功记录并跳过。
+
+每个 SKU 完成后会立即追加写入 `model_results.jsonl`，不再等待整批结束。若进程恰好在正文文件写入后、结果索引追加前中断，下次启动会校验 `full_outputs` 并自动恢复该成功记录，避免重复付费调用。

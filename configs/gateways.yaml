@@ -6,6 +6,13 @@ gateways:
     base_url: https://api.tu-zi.com
     api_key_env: TUZI_API_KEY
     auth_header: Authorization
+    timeout_seconds: 300
+    max_retries: 2
+  tuzi_text:
+    type: tuzi
+    base_url: https://api.tu-zi.com
+    api_key_env: TUZI_TEXT_API_KEY
+    auth_header: Authorization
     timeout_seconds: 120
     max_retries: 2
   buzz:

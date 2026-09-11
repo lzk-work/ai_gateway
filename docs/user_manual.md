@@ -59,7 +59,7 @@ python subtasks/walmart_image_prompt/00_full_workflow.py --dry-run
 - 已成功跳过、待处理和本次选择数量；
 - 主图与副图 checkpoint 状态。
 
-试运行不会调用 BUZZ/MXAPI、不会上传 OSS，也不会写业务结果文件。
+试运行不会调用文本/图片模型、不会上传 OSS，也不会写业务结果文件。
 
 ## 4. 正式运行
 
@@ -84,7 +84,7 @@ python subtasks/walmart_image_prompt/00_full_workflow.py
 
 ```powershell
 python subtasks/walmart_image_prompt/01_generate_prompt_tasks.py
-python subtasks/walmart_image_prompt/02_call_buzz_model.py
+python subtasks/walmart_image_prompt/02_call_prompt_model.py
 python subtasks/walmart_image_prompt/03b_generate_main_images.py
 python subtasks/walmart_image_prompt/03_generate_and_download_images.py
 python subtasks/walmart_image_prompt/05b_upload_main_oss.py
@@ -118,7 +118,7 @@ python subtasks/walmart_image_prompt/99_batch_stats.py
 
 ## 7. 输出说明
 
-- BUZZ 完整输出：`02_call_buzz_model/full_outputs/`。
+- 文本模型完整输出：`02_call_prompt_model/full_outputs/`。
 - 主图生成结果：`04b_generate_main_images/`。
 - 副图生成结果：`04_generate_images/`。
 - 主图 OSS 结果：`05b_upload_main_oss/`。

@@ -27,7 +27,7 @@ E:\WorkSpace\ai_gateway
     walmart_image_prompt/       当前 Walmart 图片提示词业务任务
       00_full_workflow.py
       01_generate_prompt_tasks.py
-      02_call_buzz_model.py
+      02_call_prompt_model.py
       03_generate_and_download_images.py
       workflow_common.py
       stages/

@@ -8,8 +8,8 @@
 
 ```text
 batches/<批次名>/03_build_image_input/walmart_sub_image_input_result.xlsx
-batches/<批次名>/02_call_buzz_model/model_results.jsonl
-batches/<批次名>/02_call_buzz_model/full_outputs/
+batches/<批次名>/02_call_prompt_model/model_results.jsonl
+batches/<批次名>/02_call_prompt_model/full_outputs/
 ```
 
 ## 输出

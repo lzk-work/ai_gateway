@@ -5,7 +5,7 @@
 ## 配置和代码
 
 - Base URL：`https://api.tu-zi.com`，网关名：`tuzi`。
-- [网关配置](../../configs/gateways.yaml)：当前 HTTP 超时 120 秒；密钥变量 `TUZI_API_KEY`，在 `configs/local.env` 或进程环境配置。
+- [网关配置](../../configs/gateways.yaml)：`tuzi_text` 文本网关读取 `TUZI_TEXT_API_KEY`；`tuzi` 生图网关读取 `TUZI_API_KEY`。两把 Key 分开配置，均不得写入仓库。
 - 鉴权：`Authorization: Bearer <API_KEY>`；不要将密钥放入 URL、文档或日志。
 - [业务总配置](../../subtasks/walmart_image_prompt/config.json)：`"image_provider": "tuzi"`。
 - [解析器](../../src/ai_gateway/clients/image_providers.py)：`TuziImageAdapter.build_payload / parse_submit / query / parse_query`。

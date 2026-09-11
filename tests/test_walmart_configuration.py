@@ -48,6 +48,20 @@ class ConfigurationTests(unittest.TestCase):
             self.assertEqual(call.call_count, retries + 1)
             self.assertEqual(result.status, "failed")
 
+    def test_optional_temperature_is_omitted(self):
+        payload = buzz.build_chat_payload(
+            next_payload={"prompt": "test", "images": []},
+            source_task={},
+            prompt_override=None,
+            model_name="gpt-5.6-luna",
+            max_tokens=100,
+            temperature=None,
+            image_detail="auto",
+        )
+        self.assertNotIn("temperature", payload)
+        responses_payload = buzz.build_responses_payload(payload)
+        self.assertNotIn("temperature", responses_payload)
+
     def test_valid_full_output_repairs_stale_status_and_loads_prompts(self):
         payload = {
             "image_plan": [
@@ -58,7 +72,7 @@ class ConfigurationTests(unittest.TestCase):
         }
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            full_output = root / "sku.json"
+            full_output = root / "sku__gpt-5.6-luna.json"
             full_output.write_text(json.dumps(payload), encoding="utf-8")
             stale_row = {
                 "task_id": "batch:sku",
@@ -80,6 +94,24 @@ class ConfigurationTests(unittest.TestCase):
             prompt_map = images.load_prompt_map(model_results)
             self.assertEqual(set(prompt_map["sku"]), set(range(1, 7)))
             self.assertIn("prompt 1", prompt_map["sku"][1])
+
+            source_task = {
+                "task_id": "batch:sku",
+                "sku": "sku",
+                "row_number": 2,
+                "next_task_payload": {"task_id": "batch:sku", "batch_id": "batch", "metadata": {"sku": "sku"}},
+            }
+            config = workflow.load_stage_config(workflow.CALL_MODEL_CONFIG, buzz.load_config)
+            config.full_outputs_dir = str(root)
+            recovered, count = buzz.recover_valid_full_outputs(
+                [], [source_task], config, ["gpt-5.6-luna"], "tuzi_text"
+            )
+            self.assertEqual(count, 1)
+            self.assertEqual(recovered[0]["status"], "success")
+
+            checkpoint = root / "checkpoint.jsonl"
+            buzz.append_jsonl_row(recovered[0], checkpoint)
+            self.assertEqual(buzz.read_jsonl(checkpoint)[0]["task_id"], "batch:sku")
 
     def test_no_duplicate_stage_retry_counts(self):
         for path in (workflow.GENERATE_MAIN_CONFIG, workflow.GENERATE_IMAGES_CONFIG, workflow.CALL_MODEL_CONFIG):
@@ -142,6 +174,15 @@ class ConfigurationTests(unittest.TestCase):
         self.assertIn("test_other_batch", config.input_excel_path)
         self.assertEqual(config.key_template, workflow.load_task_config()["oss"]["key_template"])
         self.assertEqual(config.concurrency, workflow.task_execution()["oss_concurrency"])
+
+    def test_text_stage_uses_platform_neutral_names(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            batches = Path(tmp)
+            with patch.object(workflow, "BATCHES_ROOT", batches):
+                self.assertEqual(workflow.batch_paths("new")["model_results"].parent.name, "02_call_prompt_model")
+        with patch.object(workflow, "load_task_config", return_value={"workflow": {"call_prompt_model": True}}):
+            switches = workflow.workflow_switches()
+            self.assertTrue(switches["call_prompt_model"])
 
     def test_legacy_replace_config_still_loads(self):
         path = ROOT / "subtasks/walmart_image_replace/stages/generate_images/config.json"
