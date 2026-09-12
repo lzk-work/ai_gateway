@@ -91,26 +91,27 @@ def thumbnail(path: Path) -> tuple[int, int, io.BytesIO] | None:
         return None
 
 
-def export_review(selected_paths: dict[str, Path]) -> dict[str, int]:
-    records = [row for row in read_jsonl(selected_paths["image_results"]) if row.get("status") == "success"]
-    if not records:
-        raise RuntimeError(f"没有可审核的成功图片: {selected_paths['image_results']}")
-    grouped: dict[str, list[dict]] = {}
-    for record in records:
-        sku = str(record.get("sku") or "").strip()
-        if sku:
-            grouped.setdefault(sku, []).append(record)
-    for sku_records in grouped.values():
-        sku_records.sort(key=image_order)
+def split_skus(skus: list[str], max_skus_per_file: int) -> list[list[str]]:
+    if max_skus_per_file <= 0:
+        raise ValueError("review.max_skus_per_file 必须大于 0")
+    return [skus[index:index + max_skus_per_file] for index in range(0, len(skus), max_skus_per_file)]
 
-    oss_urls: dict[str, str] = {}
-    for row in read_jsonl(selected_paths["oss_results"]):
-        if row.get("status") not in {"success", "skipped"} or not row.get("oss_url"):
-            continue
-        oss_urls[f"{row.get('sku')}::{row.get('image_name')}"] = str(row["oss_url"])
 
-    metadata = load_source_meta()
-    max_images = max(len(value) for value in grouped.values())
+def output_paths(base: Path, part_count: int) -> list[Path]:
+    if part_count <= 1:
+        return [base]
+    width = max(3, len(str(part_count)))
+    return [base.with_name(f"{base.stem}_{index:0{width}d}{base.suffix}") for index in range(1, part_count + 1)]
+
+
+def write_review_part(
+    output: Path,
+    skus: list[str],
+    grouped: dict[str, list[dict]],
+    oss_urls: dict[str, str],
+    metadata: dict[str, dict[str, str]],
+    max_images: int,
+) -> dict[str, int]:
     image_headers = ["主图", *[f"副图{i}" for i in range(1, max_images)]]
     link_headers = [f"{name}链接" for name in image_headers]
     headers = ["SKU", "标题", "五点", "描述", *image_headers, *link_headers]
@@ -127,7 +128,7 @@ def export_review(selected_paths: dict[str, Path]) -> dict[str, int]:
     image_start = 5
     link_start = image_start + max_images
     embedded = linked = 0
-    for row_number, sku in enumerate(sorted(grouped), start=2):
+    for row_number, sku in enumerate(skus, start=2):
         meta = metadata.get(sku, {})
         sheet.cell(row_number, 1, sku)
         sheet.cell(row_number, 2, meta.get("title", ""))
@@ -161,12 +162,49 @@ def export_review(selected_paths: dict[str, Path]) -> dict[str, int]:
         sheet.column_dimensions[get_column_letter(column)].width = THUMB_SIZE / 7 + 2
     for column in range(link_start, link_start + max_images):
         sheet.column_dimensions[get_column_letter(column)].width = 40
-    sheet.auto_filter.ref = f"A1:{get_column_letter(len(headers))}{len(grouped) + 1}"
-
-    output = selected_paths["review_excel"]
+    sheet.auto_filter.ref = f"A1:{get_column_letter(len(headers))}{len(skus) + 1}"
     output.parent.mkdir(parents=True, exist_ok=True)
     workbook.save(output)
-    return {"skus": len(grouped), "embedded": embedded, "linked": linked}
+    workbook.close()
+    return {"embedded": embedded, "linked": linked}
+
+
+def export_review(selected_paths: dict[str, Path], max_skus_per_file: int) -> dict:
+    records = [row for row in read_jsonl(selected_paths["image_results"]) if row.get("status") == "success"]
+    if not records:
+        raise RuntimeError(f"没有可审核的成功图片: {selected_paths['image_results']}")
+    grouped: dict[str, list[dict]] = {}
+    for record in records:
+        sku = str(record.get("sku") or "").strip()
+        if sku:
+            grouped.setdefault(sku, []).append(record)
+    for sku_records in grouped.values():
+        sku_records.sort(key=image_order)
+
+    oss_urls: dict[str, str] = {}
+    for row in read_jsonl(selected_paths["oss_results"]):
+        if row.get("status") not in {"success", "skipped"} or not row.get("oss_url"):
+            continue
+        oss_urls[f"{row.get('sku')}::{row.get('image_name')}"] = str(row["oss_url"])
+
+    metadata = load_source_meta()
+    all_skus = sorted(grouped)
+    sku_parts = split_skus(all_skus, max_skus_per_file)
+    outputs = output_paths(selected_paths["review_excel"], len(sku_parts))
+    base = selected_paths["review_excel"]
+    # Remove stale outputs from a previous run with a different number of parts.
+    for old in [base, *base.parent.glob(f"{base.stem}_*{base.suffix}")]:
+        if old.is_file() and old not in outputs:
+            old.unlink()
+    embedded = linked = 0
+    max_images = max(len(value) for value in grouped.values())
+    for output, skus in zip(outputs, sku_parts):
+        counts = write_review_part(output, skus, grouped, oss_urls, metadata, max_images)
+        embedded += counts["embedded"]
+        linked += counts["linked"]
+        print(f"分卷完成: {output.name} | SKU={len(skus)} | 图片={counts['embedded']}")
+    return {"skus": len(grouped), "embedded": embedded, "linked": linked,
+            "files": len(outputs), "outputs": outputs}
 
 
 def main() -> None:
@@ -174,10 +212,16 @@ def main() -> None:
     parser.add_argument("--batch", help="批次目录名；默认使用 config.json 当前输入文件名")
     args = parser.parse_args()
     selected = paths() if not args.batch else batch_paths(args.batch)
-    result = export_review(selected)
+    review_config = load_task_config().get("review", {})
+    max_skus_per_file = int(review_config.get("max_skus_per_file", 1000))
+    result = export_review(selected, max_skus_per_file)
     print("\n=== 复刻图片审核预览导出完成 ===")
-    print(f"SKU={result['skus']} | 嵌入图片={result['embedded']} | OSS链接={result['linked']}")
-    print(f"输出: {selected['review_excel']}")
+    print(
+        f"SKU={result['skus']} | 每卷最多={max_skus_per_file} | 文件={result['files']} | "
+        f"嵌入图片={result['embedded']} | OSS链接={result['linked']}"
+    )
+    for output in result["outputs"]:
+        print(f"输出: {output}")
 
 
 if __name__ == "__main__":

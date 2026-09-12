@@ -20,11 +20,27 @@ spec = importlib.util.spec_from_file_location("replication_workflow_common", TAS
 replication = importlib.util.module_from_spec(spec)
 assert spec.loader is not None
 spec.loader.exec_module(replication)
+review_spec = importlib.util.spec_from_file_location(
+    "replication_review", TASK / "05_export_replication_review.py"
+)
+review = importlib.util.module_from_spec(review_spec)
+assert review_spec.loader is not None
+review_spec.loader.exec_module(review)
 from ai_gateway.subtasks.mxapi_generate_images import load_config, load_work_rows
 from ai_gateway.subtasks.mxapi_generate_images import image_kind_enabled, sku_target_count, sku_targets_from_complete_rows
 
 
 class ReplicationWorkflowTests(unittest.TestCase):
+    def test_review_splits_every_one_thousand_skus(self):
+        skus = [f"sku-{index}" for index in range(3500)]
+        parts = review.split_skus(skus, 1000)
+        self.assertEqual([len(part) for part in parts], [1000, 1000, 1000, 500])
+        outputs = review.output_paths(Path("审核预览.xlsx"), len(parts))
+        self.assertEqual(
+            [path.name for path in outputs],
+            ["审核预览_001.xlsx", "审核预览_002.xlsx", "审核预览_003.xlsx", "审核预览_004.xlsx"],
+        )
+
     def test_main_and_sub_generation_switches_are_independent(self):
         data = replication.generation_config_data()
         cfg = load_config(replication.GENERATE_CONFIG, config_data=data)

@@ -28,6 +28,9 @@
     "image_concurrency": 15,
     "oss_concurrency": 15
   },
+  "review": {
+    "max_skus_per_file": 1000
+  },
   "scheduler": {
     "enabled": true,
     "interval_seconds": 600,

@@ -164,6 +164,8 @@ python subtasks/walmart_image_prompt/99_batch_stats.py
 
 05、05b、06 支持 `--batch-name <批次名>`；07 使用 `--batch <批次名>`。
 
+审核预览按总配置 `review.max_skus_per_file` 自动分卷，默认每个 Excel 最多1000个 SKU。超过上限时生成 `审核预览_001.xlsx`、`审核预览_002.xlsx` 等文件；不超过上限时仍生成单个 `审核预览.xlsx`。重新导出会清理该批次上一次遗留的多余分卷。
+
 ## 断点续跑
 
 ### BUZZ

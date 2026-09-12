@@ -147,6 +147,19 @@ def load_oss_map(path: Path) -> dict[str, str]:
     return mapping
 
 
+def split_skus(skus: list[str], max_skus_per_file: int) -> list[list[str]]:
+    if max_skus_per_file <= 0:
+        raise ValueError("review.max_skus_per_file 必须大于 0")
+    return [skus[index:index + max_skus_per_file] for index in range(0, len(skus), max_skus_per_file)]
+
+
+def output_paths(base: Path, part_count: int) -> list[Path]:
+    if part_count <= 1:
+        return [base]
+    width = max(3, len(str(part_count)))
+    return [base.with_name(f"{base.stem}_{index:0{width}d}{base.suffix}") for index in range(1, part_count + 1)]
+
+
 def export(batch: str, out_path: Path) -> None:
     paths = batch_paths(batch)
     sub_records = load_jsonl(Path(paths["image_results"]))
@@ -179,87 +192,80 @@ def export(batch: str, out_path: Path) -> None:
         return main_map.get(sku, []) + sub_map.get(sku, [])
 
     max_imgs = max(len(images_for(sku)) for sku in all_skus)
-
-    wb = openpyxl.Workbook()
-    ws = wb.active
-    ws.title = "审核预览"
-    oss_link_count = 0
-
-    # 表头：SKU | 标题 | 五点 | [全部嵌入图] | [全部对应链接]
-    img_header = ["主图"] + [f"副图{i}" for i in range(1, max_imgs)]
-    link_header = ["主图链接"] + [f"副图{i}链接" for i in range(1, max_imgs)]
-    header = ["SKU", "标题", "五点"] + img_header + link_header
-    ws.append(header)
-    for col_idx in range(1, len(header) + 1):
-        ws.cell(row=1, column=col_idx).font = Font(bold=True)
-
-    info_width = 3  # SKU + 标题 + 五点 占前 3 列
-    img_start = info_width + 1            # 嵌入图起始列（D）
-    link_start = img_start + max_imgs    # 链接起始列
-
-    success_count = 0
-    for row_idx, sku in enumerate(all_skus, start=2):
-        meta = source_meta.get(sku, {})
-        ws.cell(row=row_idx, column=1, value=sku)
-        ws.cell(row=row_idx, column=2, value=meta.get("title", ""))
-        ws.cell(row=row_idx, column=3, value=meta.get("bullets", ""))
-        ws.cell(row=row_idx, column=3).alignment = openpyxl.styles.Alignment(wrap_text=True, vertical="top")
-
-        imgs = images_for(sku)
-        max_h = THUMB_SIZE
-        # 嵌入图块
-        for j, rec in enumerate(imgs):
-            col_idx = img_start + j
-            col = get_column_letter(col_idx)
-            src = rec.get("downloaded_path")
-            if not src or not Path(str(src)).exists():
-                ws.cell(row=row_idx, column=col_idx, value="生成失败/缺失")
-                continue
-            thumb = make_thumbnail(Path(str(src)))
-            if not thumb:
-                ws.cell(row=row_idx, column=col_idx, value="生成失败/缺失")
-                continue
-            w, h, buf = thumb
-            max_h = max(max_h, h)
-            xl_img = XLImage(buf)
-            xl_img.width = w
-            xl_img.height = h
-            ws.add_image(xl_img, f"{col}{row_idx}")
-            success_count += 1
-        # 链接块：仅取 OSS 上传成功的落地地址；未成功上传的链接留空
-        for j, rec in enumerate(imgs):
-            col_idx = link_start + j
-            key = f"{sku}::{rec.get('image_name')}"
-            url = oss_map.get(key)
-            if url:
-                oss_link_count += 1
-                cell = ws.cell(row=row_idx, column=col_idx, value=str(url))
-                cell.hyperlink = str(url)
-                cell.font = Font(color="0563C1", underline="single")
-            else:
-                # 未成功上传 OSS 的图，链接不可用，留空
-                ws.cell(row=row_idx, column=col_idx, value="")
-
-        # 行高按本行最高图设置（1px ≈ 0.75pt）
-        ws.row_dimensions[row_idx].height = max_h * 0.75 + 6
-
-    # 列宽
-    ws.column_dimensions["A"].width = 22
-    ws.column_dimensions["B"].width = 30
-    ws.column_dimensions["C"].width = 45
-    for col_idx in range(img_start, link_start):
-        ws.column_dimensions[get_column_letter(col_idx)].width = THUMB_SIZE / 7.0 + 2
-    for col_idx in range(link_start, link_start + max_imgs):
-        ws.column_dimensions[get_column_letter(col_idx)].width = 40
-
+    max_skus_per_file = int(load_task_config().get("review", {}).get("max_skus_per_file", 1000))
+    sku_parts = split_skus(all_skus, max_skus_per_file)
+    outputs = output_paths(out_path, len(sku_parts))
     out_path.parent.mkdir(parents=True, exist_ok=True)
-    wb.save(out_path)
+    for old in [out_path, *out_path.parent.glob(f"{out_path.stem}_*{out_path.suffix}")]:
+        if old.is_file() and old not in outputs:
+            old.unlink()
+
+    success_count = oss_link_count = 0
+    for output, part_skus in zip(outputs, sku_parts):
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        ws.title = "审核预览"
+        img_header = ["主图"] + [f"副图{i}" for i in range(1, max_imgs)]
+        link_header = ["主图链接"] + [f"副图{i}链接" for i in range(1, max_imgs)]
+        header = ["SKU", "标题", "五点"] + img_header + link_header
+        ws.append(header)
+        for col_idx in range(1, len(header) + 1):
+            ws.cell(row=1, column=col_idx).font = Font(bold=True)
+        ws.freeze_panes = "D2"
+        info_width = 3
+        img_start = info_width + 1
+        link_start = img_start + max_imgs
+        part_images = 0
+        for row_idx, sku in enumerate(part_skus, start=2):
+            meta = source_meta.get(sku, {})
+            ws.cell(row=row_idx, column=1, value=sku)
+            ws.cell(row=row_idx, column=2, value=meta.get("title", ""))
+            ws.cell(row=row_idx, column=3, value=meta.get("bullets", ""))
+            ws.cell(row=row_idx, column=3).alignment = openpyxl.styles.Alignment(wrap_text=True, vertical="top")
+            imgs = images_for(sku)
+            max_h = THUMB_SIZE
+            for j, rec in enumerate(imgs):
+                col_idx = img_start + j
+                col = get_column_letter(col_idx)
+                src = rec.get("downloaded_path")
+                thumb = make_thumbnail(Path(str(src))) if src and Path(str(src)).exists() else None
+                if not thumb:
+                    ws.cell(row=row_idx, column=col_idx, value="生成失败/缺失")
+                    continue
+                w, h, buf = thumb
+                max_h = max(max_h, h)
+                xl_img = XLImage(buf)
+                xl_img.width, xl_img.height = w, h
+                ws.add_image(xl_img, f"{col}{row_idx}")
+                success_count += 1
+                part_images += 1
+            for j, rec in enumerate(imgs):
+                col_idx = link_start + j
+                url = oss_map.get(f"{sku}::{rec.get('image_name')}")
+                if url:
+                    oss_link_count += 1
+                    cell = ws.cell(row=row_idx, column=col_idx, value=str(url))
+                    cell.hyperlink = str(url)
+                    cell.font = Font(color="0563C1", underline="single")
+            ws.row_dimensions[row_idx].height = max_h * 0.75 + 6
+        ws.column_dimensions["A"].width = 22
+        ws.column_dimensions["B"].width = 30
+        ws.column_dimensions["C"].width = 45
+        for col_idx in range(img_start, link_start):
+            ws.column_dimensions[get_column_letter(col_idx)].width = THUMB_SIZE / 7.0 + 2
+        for col_idx in range(link_start, link_start + max_imgs):
+            ws.column_dimensions[get_column_letter(col_idx)].width = 40
+        ws.auto_filter.ref = f"A1:{get_column_letter(len(header))}{len(part_skus) + 1}"
+        wb.save(output)
+        wb.close()
+        print(f"分卷完成: {output.name} | SKU={len(part_skus)} | 图片={part_images}")
     print(f"\n=== 审核预览导出完成 ===")
-    print(f"SKU 数: {len(all_skus)} | 嵌入成功图: {success_count} 张 | 含标题/五点列: {sum(1 for s in all_skus if s in source_meta)}")
+    print(f"SKU 数: {len(all_skus)} | 每卷最多: {max_skus_per_file} | 文件数: {len(outputs)} | 嵌入成功图: {success_count} 张 | 含标题/五点列: {sum(1 for s in all_skus if s in source_meta)}")
     print(f"链接: 仅 OSS 成功上传地址，命中 {oss_link_count}/{success_count} 张" + ("" if has_oss else "（警告: 未读取到 OSS 结果, 链接全空）"))
     print(f"布局: SKU|标题|五点 | [嵌入图×{max_imgs}] | [链接×{max_imgs}]")
     print(f"缩略图: 最长边 {THUMB_SIZE}px / JPEG q{JPEG_QUALITY}")
-    print(f"输出: {out_path}")
+    for output in outputs:
+        print(f"输出: {output}")
 
 
 def main() -> None:
