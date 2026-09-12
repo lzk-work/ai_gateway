@@ -1,0 +1,14 @@
+{
+  "name": "upload_replication_images",
+  "description": "上传复刻模式已下载图片到阿里云 OSS。",
+  "input": {"sheet_name": "Sheet1"},
+  "oss": {"overwrite": true},
+  "columns": {
+    "sku": "SKU",
+    "image_name": "图片命名",
+    "download_status": "下载结果",
+    "task_id": "task_id"
+  },
+  "limits": {"batch_size": 500},
+  "resume": {"skip_success": true}
+}

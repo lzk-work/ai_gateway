@@ -78,6 +78,8 @@ class MxapiGenerateImagesConfig:
     size: str | None = None
     deferred_async: bool = False
     max_regenerations_per_image: int = 2
+    generate_main_images: bool = True
+    generate_sub_images: bool = True
 
 
 @dataclass(slots=True)
@@ -89,7 +91,7 @@ class ImageGenerationRecord:
     image_number: int | None
     status: str
     task_id: str | None
-    reference_image: str | None
+    reference_image: str | list[str] | None
     generated_image_url: str | None
     downloaded_path: str | None
     file_size: int | None
@@ -275,13 +277,22 @@ def run(config: MxapiGenerateImagesConfig) -> list[ImageGenerationRecord]:
     if any(r.get("status") == "submission_unknown" for r in existing_records):
         print("警告: 存在未取得任务ID的历史提交，将按提交上限重试，可能重复生成或扣费。", flush=True)
     rows = apply_checkpoint_to_rows(rows, existing_records)
-    completed = completed_keys(existing_records) if config.skip_success else set()
-    pending_rows = [row for row in rows if row_key(row) not in completed]
-    local_success_count = len(rows) - len(pending_rows)
+    # Preserve each SKU's target from the complete input before successful rows
+    # and completed-SKU fallback candidates are filtered out.  Deriving the
+    # target from pending_rows makes a SKU with 4 successes + 2 pending rows
+    # appear to have a target of 2, so both pending rows are incorrectly skipped.
+    active_rows = [row for row in rows if image_kind_enabled(config, row)]
+    active_keys = {row_key(row) for row in active_rows}
+    target_by_sku = sku_targets_from_complete_rows(config, active_rows)
+    completed = completed_keys(existing_records, config.max_regenerations_per_image) if config.skip_success else set()
+    pending_rows = [row for row in active_rows if row_key(row) not in completed]
+    local_success_count = len(active_rows) - len(pending_rows)
     completed_sku_candidate_count = 0
     if config.skip_success and config.desired_count:
         success_count_by_sku: dict[str, int] = {}
         for saved in existing_records:
+            if record_key(saved) not in active_keys:
+                continue
             if not is_completed_success(saved):
                 continue
             sku = str(saved.get("sku") or "").strip()
@@ -294,7 +305,8 @@ def run(config: MxapiGenerateImagesConfig) -> list[ImageGenerationRecord]:
         pending_rows = [
             row
             for row in pending_rows
-            if success_count_by_sku.get(str(row.get("sku") or "").strip(), 0) < config.desired_count
+            if success_count_by_sku.get(str(row.get("sku") or "").strip(), 0)
+            < target_by_sku.get(str(row.get("sku") or "").strip(), 0)
         ]
         completed_sku_candidate_count = before_complete_sku_filter - len(pending_rows)
     if config.max_records and config.max_records > 0:
@@ -328,9 +340,13 @@ def run(config: MxapiGenerateImagesConfig) -> list[ImageGenerationRecord]:
 
     phase_name = "异步图片提交/查询阶段" if config.deferred_async else "图片生成阶段"
     print(f"\n=== {config.provider.upper()} {phase_name} ===", flush=True)
-    sku_count = count_skus(rows)
-    target_count = desired_result_count(rows, config.desired_count)
-    print(f"候选输入: {len(rows)} 行 / {sku_count} 个 SKU", flush=True)
+    sku_count = count_skus(active_rows)
+    target_count = desired_result_count(active_rows, config.desired_count)
+    print(
+        f"候选输入: {len(rows)} 行 | 本次启用: {len(active_rows)} 行 / {sku_count} 个 SKU "
+        f"(主图={'开' if config.generate_main_images else '关'}, 副图={'开' if config.generate_sub_images else '关'})",
+        flush=True,
+    )
     print(
         f"最终目标: {target_count} 张 | 本地已成功(不重复处理): {local_success_count} 张 | "
         f"达标SKU剩余候选(不处理): {completed_sku_candidate_count} 行",
@@ -342,7 +358,16 @@ def run(config: MxapiGenerateImagesConfig) -> list[ImageGenerationRecord]:
         f"(max_records={config.max_records} 个 SKU)",
         flush=True,
     )
-    records = process_rows(pending_rows, prompt_map, config, client, checkpoint_store, progress)
+    records = process_rows(
+        pending_rows,
+        prompt_map,
+        config,
+        client,
+        checkpoint_store,
+        progress,
+        target_by_sku=target_by_sku,
+        active_keys=active_keys,
+    )
     records.extend(blocked_records)
     merged = merge_records(checkpoint_store.rows(), records, rows)
     write_jsonl_rows(merged, config.output_results_path)
@@ -364,9 +389,12 @@ def load_work_rows(config: MxapiGenerateImagesConfig):
     workbook = load_workbook(input_path)
     sheet = workbook[config.input_sheet_name]
     headers = header_map(sheet)
+    reference_headers = config.columns.get("reference_images") or [config.columns["reference_image"]]
+    if isinstance(reference_headers, str):
+        reference_headers = [reference_headers]
     required = [
         config.columns["sku"],
-        config.columns["reference_image"],
+        *reference_headers,
         config.columns["image_name"],
         config.columns["status"],
         config.columns["task_id"],
@@ -383,7 +411,9 @@ def load_work_rows(config: MxapiGenerateImagesConfig):
     for row_number in range(2, sheet.max_row + 1):
         sku = cell_text(sheet, row_number, headers[config.columns["sku"]])
         image_name = cell_text(sheet, row_number, headers[config.columns["image_name"]])
-        reference_image = cell_text(sheet, row_number, headers[config.columns["reference_image"]])
+        references = [cell_text(sheet, row_number, headers[name]) for name in reference_headers]
+        references = [value for value in references if value]
+        reference_image = references[0] if len(reference_headers) == 1 and references else references
         status = cell_text(sheet, row_number, headers[config.columns["status"]])
         task_id = cell_text(sheet, row_number, headers[config.columns["task_id"]])
         if not sku or not image_name:
@@ -442,8 +472,32 @@ def desired_result_count(rows: list[dict[str, Any]], desired_count: int | None) 
 def sku_target_count(config: MxapiGenerateImagesConfig, sku_rows: list[dict[str, Any]]) -> int:
     """Target for the whole SKU, never derived from only its remaining rows."""
     if config.prompt_mode == "fixed":
-        return 1
+        configured = int(config.desired_count) if config.desired_count else len(sku_rows)
+        return min(configured, len(sku_rows))
     return int(config.desired_count) if config.desired_count else len(sku_rows)
+
+
+def image_kind_enabled(config: MxapiGenerateImagesConfig, row: dict[str, Any]) -> bool:
+    is_main = str(row.get("image_name") or "").startswith("new_main_") or str(
+        row.get("image_type") or ""
+    ).strip() == "Main Image"
+    return config.generate_main_images if is_main else config.generate_sub_images
+
+
+def sku_targets_from_complete_rows(
+    config: MxapiGenerateImagesConfig,
+    rows: list[dict[str, Any]],
+) -> dict[str, int]:
+    """Calculate stable per-SKU targets before completed rows are filtered."""
+    rows_by_sku: dict[str, list[dict[str, Any]]] = {}
+    for row in rows:
+        sku = str(row.get("sku") or "").strip()
+        if sku:
+            rows_by_sku.setdefault(sku, []).append(row)
+    return {
+        sku: sku_target_count(config, sku_rows)
+        for sku, sku_rows in rows_by_sku.items()
+    }
 
 
 def limit_rows_by_sku(rows: list[dict[str, Any]], max_records: int | None) -> list[dict[str, Any]]:
@@ -468,18 +522,28 @@ def limit_rows_by_sku(rows: list[dict[str, Any]], max_records: int | None) -> li
     return selected
 
 
-def completed_keys(rows: list[dict[str, Any]]) -> set[str]:
-    return {record_key(row) for row in rows if is_terminal_skippable(row)}
+def completed_keys(rows: list[dict[str, Any]], max_regenerations_per_image: int | None = None) -> set[str]:
+    return {
+        record_key(row)
+        for row in rows
+        if is_terminal_skippable(row, max_regenerations_per_image)
+    }
 
 
-def is_terminal_skippable(row: dict[str, Any]) -> bool:
+def is_terminal_skippable(row: dict[str, Any], max_regenerations_per_image: int | None = None) -> bool:
     """Only a verified local success is permanently skippable.
 
     A fallback candidate marked ``skipped`` may be needed in a later cycle if
     one of the previously in-flight tasks fails, so skipped is intentionally
     recalculated instead of treated as terminal.
     """
-    return row.get("status") == "failed_exhausted" or is_completed_success(row)
+    if is_completed_success(row):
+        return True
+    if row.get("status") != "failed_exhausted":
+        return False
+    if max_regenerations_per_image is None:
+        return True
+    return int(row.get("attempts", 0) or 0) >= max(int(max_regenerations_per_image), 0)
 
 
 def is_completed_success(row: dict[str, Any]) -> bool:
@@ -575,6 +639,8 @@ def process_rows(
     client: MxapiImageClient,
     checkpoint_store: CheckpointStore,
     progress: RowProgress,
+    target_by_sku: dict[str, int] | None = None,
+    active_keys: set[str] | None = None,
 ) -> list[ImageGenerationRecord]:
     if not rows:
         return []
@@ -603,10 +669,17 @@ def process_rows(
         occupied = sum(
             1
             for saved in checkpoint_store.rows()
-            if str(saved.get("sku") or "").strip() == sku and saved.get("status") == "success"
+            if str(saved.get("sku") or "").strip() == sku
+            and saved.get("status") == "success"
+            and (active_keys is None or record_key(saved) in active_keys)
         )
         existing_task_count = sum(1 for row in sku_rows if row.get("task_id"))
-        target = sku_target_count(config, sku_rows)
+        # sku_rows contains only this cycle's pending rows.  The final target
+        # must come from the complete input, otherwise existing successes can
+        # exceed the shrunken pending-row target and suppress required work.
+        target = (target_by_sku or {}).get(sku)
+        if target is None:
+            target = sku_target_count(config, sku_rows)
         print(
             f"开始处理 SKU={sku} | 已有成功={occupied} | 已有task_id={existing_task_count} | "
             f"目标={target} | 候选行={len(sku_rows)}",

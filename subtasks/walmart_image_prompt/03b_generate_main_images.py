@@ -83,7 +83,7 @@ def preview() -> None:
     checkpoint = CheckpointStore(config.checkpoint_path)
     checkpoint_rows = checkpoint.rows()
     rows = apply_checkpoint_to_rows(rows, checkpoint_rows)
-    completed = completed_keys(checkpoint_rows) if config.skip_success else set()
+    completed = completed_keys(checkpoint_rows, config.max_regenerations_per_image) if config.skip_success else set()
     pending = [row for row in rows if row_key(row) not in completed]
     selected = limit_rows_by_sku(pending, config.max_records)
 

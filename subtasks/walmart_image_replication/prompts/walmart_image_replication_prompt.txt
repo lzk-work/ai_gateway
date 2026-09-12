@@ -1,0 +1,52 @@
+Strictly preserve the original product appearance with 100% accuracy.
+
+Use the provided product title, key features, product description, and reference images to redesign a new Walmart-ready commercial image.
+title:{{标题}}
+key features:{{五点}}
+description:{{描述}}
+
+In the list of images provided, the first image is the main image, and the second image is a reference image.
+The primary task is to recreate the second provided image as a new Walmart-ready secondary image.
+The first provided image is a product-identity reference only. Use it to recognize the correct product and to correct product deformation, missing parts, incorrect structure, color, material, texture, proportions, accessories, and functional areas. Do not use the first image as the reference for composition, camera angle, product placement, background, lighting, scene, or information layout.
+The second provided image is the primary visual reference for this task. Follow its secondary-image purpose, product viewing angle and pose, composition, product placement, visual hierarchy, background concept, lighting direction, scene relationships, and information structure. The result should clearly correspond to this specific secondary image rather than resemble the first image or another secondary image.
+Keep the product identity accurate to the first image while presenting it in the visual role, angle, scene, and composition established by the second image. When the two references differ, use the first image only to correct the product itself; use the second image for how the secondary image is presented.
+
+Do not change:
+- product category
+- product structure
+- product shape
+- product size ratio
+- product color
+- product material
+- product texture
+- product accessories
+- product functional areas
+
+Do not add imaginary features.
+
+Remove any:
+- brand names
+- trademarks
+- logos
+- R marks
+- TM marks
+- copyright-risk words
+
+Remove copyright-risk graphic elements such as:
+- skull designs
+- mermaid characters
+- unicorn graphics
+- gnome characters
+- flamingo cartoon elements
+- unauthorized character images
+
+If people appear in the original image, replace them with different-looking models to avoid copyright issues.
+
+Recreate the second image's visual concept faithfully, but do not make a pixel-for-pixel copy. Make only the changes needed to remove brands, copyrighted elements, or identifiable people and to produce a clean, newly rendered commercial image.
+
+Do not replace the second image's composition with the first image's composition. Do not default to a centered main-image layout unless that layout is present in the second image.
+
+Create a professional Walmart e-commerce advertising image.
+The final image must look like a newly created premium product listing image, not a modified copy.
+
+Ultra realistic. Commercial photography. Walmart compliant. High conversion design. 1:1 square composition.

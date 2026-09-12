@@ -1,0 +1,43 @@
+{
+  "name": "walmart_image_replication",
+  "image_provider": "tuzi",
+  "description": "使用产品主图和对应原副图直接复刻 Walmart 副图，不调用文本模型。",
+  "input": {
+    "excel_path": "E:/WorkSpace/ai_gateway/subtasks/walmart_image_replication/input/develop_flow_260911_re.xlsx",
+    "sheet_name": "Sheet1",
+    "columns": {
+      "sku": "SKU",
+      "title": "标题",
+      "features": "五点",
+      "description": "描述",
+      "main_image": "主图",
+      "sub_images": ["副图参考1", "副图参考2", "副图参考3", "副图参考4", "副图参考5", "副图参考6"]
+    }
+  },
+  "image_generation": {
+    "generate_main_images": true,
+    "generate_sub_images": true,
+    "max_sub_images": 5,
+    "max_regenerations_per_image": 4
+  },
+  "oss": {
+    "key_template": "develop/{sku}/{image_name}.png"
+  },
+  "execution": {
+    "max_records": 1500,
+    "image_concurrency": 15,
+    "oss_concurrency": 15
+  },
+  "scheduler": {
+    "enabled": true,
+    "interval_seconds": 600,
+    "stop_when_complete": true,
+    "max_cycles": null
+  },
+  "workflow": {
+    "build_input": true,
+    "generate_images": true,
+    "upload_oss": true,
+    "build_final_result": true
+  }
+}

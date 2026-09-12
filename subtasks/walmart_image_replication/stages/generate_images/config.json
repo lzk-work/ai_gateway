@@ -1,0 +1,41 @@
+{
+  "name": "generate_replication_images",
+  "description": "使用主图和对应副图两张参考图异步生成复刻副图。",
+  "execution": {
+    "model": {
+      "name": "gpt-image-2-1k",
+      "aspect_ratio": "1:1",
+      "quality": "low",
+      "resolution": "1K",
+      "size": "2048x2048"
+    }
+  },
+  "input": {"sheet_name": "Sheet1"},
+  "columns": {
+    "sku": "SKU",
+    "reference_images": ["产品主图链接", "参考副图链接"],
+    "image_name": "图片命名",
+    "image_type": "图片类型",
+    "prompt": "生成提示词",
+    "status": "下载结果",
+    "task_id": "task_id"
+  },
+  "prompt_mode": "fixed",
+  "limits": {
+    "poll_interval_seconds": 10,
+    "max_wait_seconds": 600,
+    "submit_delay_seconds": 0.5,
+    "download_timeout_seconds": 60
+  },
+  "retry": {
+    "max_download_retries": 5,
+    "query_attempts_per_cycle": 3,
+    "query_retry_delay_seconds": 5,
+    "retry_delay_seconds": 5
+  },
+  "resume": {
+    "skip_success": true,
+    "poll_existing_task_id": true,
+    "deferred_async": true
+  }
+}

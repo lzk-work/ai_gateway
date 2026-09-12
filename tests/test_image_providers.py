@@ -38,6 +38,13 @@ class ProviderTests(unittest.TestCase):
         self.assertEqual(self.mx.build_payload("p", "ref", self.cfg),
                          dict(prompt="p", aspect_ratio="1:1", quality="low", resolution="1K", reference_images=["ref"]))
 
+    def test_increasing_regeneration_limit_reopens_exhausted_task(self):
+        row = {"sku": "sku", "image_name": "new_sub1_sku", "status": "failed_exhausted", "attempts": 4}
+        self.assertIn("sku::new_sub1_sku", engine.completed_keys([row], 4))
+        self.assertNotIn("sku::new_sub1_sku", engine.completed_keys([row], 6))
+        row["attempts"] = 6
+        self.assertIn("sku::new_sub1_sku", engine.completed_keys([row], 6))
+
     def test_size_not_silently_downgraded(self):
         self.cfg.resolution = "4K"
         with self.assertRaises(ImageProtocolError):

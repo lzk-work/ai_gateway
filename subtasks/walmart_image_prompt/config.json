@@ -3,7 +3,7 @@
     "image_provider": "tuzi",
     "description":  "Walmart 图片生成业务。总配置管理平台、源表、并发、选图和OSS对象模板；阶段配置只保留有效模型参数、列映射、模板和执行规则，批次路径由代码派生。",
     "oss":  {
-                "key_template":  "walmart/{sku}/{image_name}.png"
+                "key_template":  "develop/{sku}/{image_name}.png"
             },
     "image_selection":  {
                 "image_type_order":  [
@@ -20,7 +20,7 @@
                               "max_regenerations_per_image":  4
                           },
     "input":  {
-                  "excel_path":  "E:/WorkSpace/ai_gateway/subtasks/walmart_image_prompt/input/batch_flow_260910_1.xlsx",
+                  "excel_path":  "E:/WorkSpace/ai_gateway/subtasks/walmart_image_prompt/input/develop_flow_260911-generation.xlsx",
                   "sheet_name":  "Sheet1"
               },
     "execution":  {

@@ -31,9 +31,11 @@ class MxapiImageAdapter(MxapiImageClient):
     provider = "mxapi"
 
     def build_payload(self, prompt, reference_image, config):
+        references = list(reference_image) if isinstance(reference_image, (list, tuple)) else [reference_image]
+        references = [str(item).strip() for item in references if str(item).strip()]
         return {"prompt": prompt, "aspect_ratio": config.aspect_ratio,
                 "quality": config.quality, "resolution": config.resolution,
-                "reference_images": [reference_image]}
+                "reference_images": references}
 
     def parse_submit(self, payload):
         if payload.get("code") != 200:
