@@ -99,7 +99,7 @@ def build_final_image_result(input_path: str | Path, output_path: str | Path) ->
         if not item[target_column]:
             item[target_column] = upload_url
 
-    ordered_rows = list(grouped.values())
+    ordered_rows = [compact_sub_images(row) for row in grouped.values()]
     write_result(output_path, ordered_rows)
     complete_sku_count = sum(1 for row in ordered_rows if count_filled_images(row) >= desired_count)
     return FinalImageResultSummary(
@@ -167,7 +167,7 @@ def build_final_image_result_from_logs(
         if not item[target_column]:
             item[target_column] = upload_url
 
-    ordered_rows = list(grouped.values())
+    ordered_rows = [compact_sub_images(row) for row in grouped.values()]
     write_result(output_path, ordered_rows)
     complete_sku_count = count_complete_skus(ordered_rows, desired_count)
     return FinalImageResultSummary(
@@ -281,6 +281,19 @@ def row_key(row: dict[str, Any]) -> str:
 
 def count_filled_images(row: dict[str, Any]) -> int:
     return sum(1 for index in range(1, 7) if row.get(f"处理后附图{index}"))
+
+
+def compact_sub_images(row: dict[str, Any]) -> dict[str, Any]:
+    """左移成功副图，保持原 sub1..sub6 的相对顺序且不留中间空列。"""
+    compacted = dict(row)
+    urls = [
+        row.get(f"处理后附图{index}")
+        for index in range(1, 7)
+        if row.get(f"处理后附图{index}")
+    ]
+    for index in range(1, 7):
+        compacted[f"处理后附图{index}"] = urls[index - 1] if index <= len(urls) else ""
+    return compacted
 
 
 def count_complete_skus(rows: list[dict[str, str]], desired_count: int = 6) -> int:
