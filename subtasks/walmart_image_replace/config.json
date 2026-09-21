@@ -7,9 +7,9 @@
   },
   "execution": {
     "max_records": 10000,
-    "concurrency": 5,
-    "image_concurrency": 5,
-    "oss_concurrency": 5
+    "concurrency": 8,
+    "image_concurrency": 10,
+    "oss_concurrency": 10
   },
   "workflow": {
     "generate_prompts": true,
