@@ -2,14 +2,14 @@
   "name": "walmart_image_replace",
   "description": "Prepare new image sets using source-SKU directories; no Walmart API calls.",
   "input": {
-    "excel_path": "subtasks/walmart_image_replace/input/image_replace_2.xlsx",
+    "excel_path": "subtasks/walmart_image_replace/input/image_replace_3-2.xlsx",
     "sheet_name": "Sheet1"
   },
   "execution": {
     "max_records": 10000,
     "concurrency": 8,
     "image_concurrency": 10,
-    "oss_concurrency": 10
+    "oss_concurrency": 20
   },
   "workflow": {
     "generate_prompts": true,

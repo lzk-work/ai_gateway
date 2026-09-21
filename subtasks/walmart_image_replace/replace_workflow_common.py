@@ -289,6 +289,19 @@ def validate_prompt(text, count):
         return None, '生成提示词缺失'
     return parsed, None
 
+def uploaded_generated_url(saved, oss_directory, image_name):
+    """Accept current JPEG objects and historical PNG objects for one planned image."""
+    if not saved or saved.get('status') != 'success' or not saved.get('oss_url') or not saved.get('oss_key'):
+        return None
+    base = f"{oss_directory['prefix']}/{image_name}"
+    key = str(saved['oss_key']).replace('\\', '/')
+    if key not in {base + '.jpg', base + '.jpeg', base + '.png'}:
+        return None
+    host, url_key = url_parts(saved['oss_url'])
+    if url_key != key or not host.startswith(oss_directory['bucket'] + '.'):
+        return None
+    return saved['oss_url']
+
 def prompt_stage(records, paths):
     from ai_gateway.subtasks import walmart_call_prompt_model as shared
     from ai_gateway.clients.openai_chat_client import OpenAIChatClient
@@ -372,8 +385,7 @@ def input_rows(records, paths, role):
         for t in r['tasks']:
             if t['role'] == role:
                 saved = uploaded.get((r['record_id'], t['image_name']))
-                expected = f"{r['oss_directory']['prefix']}/{t['image_name']}.png"
-                if saved and saved.get('status') == 'success' and saved.get('oss_key') == expected and saved.get('oss_url'):
+                if uploaded_generated_url(saved, r['oss_directory'], t['image_name']):
                     continue
                 rows.append({'sku': r['record_id'], 'reference': [r['reference_main_url'], *r['reference_secondary_urls']],
                     'image_name': t['image_name'], 'prompt': fixed if role == 'main' else prompts[t['ordinal']]})
@@ -522,12 +534,8 @@ def build_results(records, paths):
         for t in r.get('tasks', []):
             up = uploaded.get((r['record_id'], t['image_name']))
             state = states.get((r['record_id'], t['image_name']), {})
-            expected = f"{r['oss_directory']['prefix']}/{t['image_name']}.png"
-            url = None
-            if up and up['status'] == 'success' and up.get('oss_url') and up.get('oss_key') == expected:
-                host, key = url_parts(up['oss_url'])
-                if key == expected and host.startswith(r['oss_directory']['bucket'] + '.'):
-                    url = up['oss_url']
+            url = uploaded_generated_url(up, r['oss_directory'], t['image_name'])
+            expected = up['oss_key'] if url else f"{r['oss_directory']['prefix']}/{t['image_name']}.jpg"
             image = {**t, 'record_id': r['record_id'], 'source_sku': r['source_sku'], 'result_sku': r['result_sku'], 'store': r['store'],
                 'origin': 'generated', 'kind': 'new', 'url': url, 'oss_key': expected, 'actual_directory': r['oss_directory']['prefix'],
                 'usage_status': 'prepared' if url else 'not_ready', 'generation_status': state.get('status', 'not_submitted'),

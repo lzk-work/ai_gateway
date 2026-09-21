@@ -25,6 +25,7 @@ from ai_gateway.clients.mxapi_image_client import validate_image_file
 
 
 _IMAGE_RESULT_UPDATE_LOCK = threading.Lock()
+_GENERATION_RECORD_CACHE: dict[Path, dict[str, dict[str, Any]]] = {}
 
 
 @dataclass(slots=True)
@@ -86,16 +87,9 @@ class CheckpointStore:
 
     def upsert(self, record: OssUploadRecord) -> None:
         with self.lock:
-            self.records[record_key(asdict(record))] = asdict(record)
-            self.flush_locked()
-
-    def flush_locked(self) -> None:
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        temp_path = self.path.with_suffix(self.path.suffix + ".tmp")
-        with temp_path.open("w", encoding="utf-8") as handle:
-            for row in self.records.values():
-                handle.write(json.dumps(row, ensure_ascii=False) + "\n")
-        temp_path.replace(self.path)
+            row = asdict(record)
+            append_jsonl_row(self.path, row)
+            self.records[record_key(row)] = row
 
 
 def find_project_root(path: Path) -> Path:
@@ -303,22 +297,26 @@ def process_rows(
     checkpoint: CheckpointStore,
 ) -> list[OssUploadRecord]:
     if not rows:
+        sync_generation_results(config)
         return []
     concurrency = max(int(config.concurrency or 1), 1)
     concurrency = min(concurrency, len(rows))
     print(f"OSS上传并发: {concurrency}", flush=True)
     if concurrency == 1:
-        return [process_one(index, len(rows), row, config, client, checkpoint) for index, row in enumerate(rows, start=1)]
-    results: dict[int, OssUploadRecord] = {}
-    with ThreadPoolExecutor(max_workers=concurrency) as executor:
-        futures = {
-            executor.submit(process_one, index, len(rows), row, config, client, checkpoint): index
-            for index, row in enumerate(rows, start=1)
-        }
-        for future in as_completed(futures):
-            index = futures[future]
-            results[index] = future.result()
-    return [results[index] for index in sorted(results)]
+        ordered = [process_one(index, len(rows), row, config, client, checkpoint) for index, row in enumerate(rows, start=1)]
+    else:
+        results: dict[int, OssUploadRecord] = {}
+        with ThreadPoolExecutor(max_workers=concurrency) as executor:
+            futures = {
+                executor.submit(process_one, index, len(rows), row, config, client, checkpoint): index
+                for index, row in enumerate(rows, start=1)
+            }
+            for future in as_completed(futures):
+                index = futures[future]
+                results[index] = future.result()
+        ordered = [results[index] for index in sorted(results)]
+    sync_generation_results(config)
+    return ordered
 
 
 def process_one(
@@ -509,29 +507,87 @@ def prepare_upload_image(source_path: Path, config: OssUploadConfig) -> tuple[Pa
 
 
 def update_generation_local_path(config: OssUploadConfig, row: dict[str, Any], local_path: Path) -> None:
-    """Keep generation resume state valid before deleting its source PNG."""
+    """Append the JPG path to the generation checkpoint before deleting PNG."""
     if not config.image_results_path:
         return
-    results_path = Path(config.image_results_path)
-    paths = [results_path]
-    if results_path.name == "image_generation_results.jsonl":
-        paths.append(results_path.with_name("image_generation_checkpoint.jsonl"))
+    results_path = Path(config.image_results_path).resolve()
+    checkpoint_path = generation_checkpoint_path(results_path)
     key = row_key(row)
     with _IMAGE_RESULT_UPDATE_LOCK:
-        for path in paths:
-            if not path.is_file():
-                continue
-            records = read_jsonl_if_exists(path)
+        records = _GENERATION_RECORD_CACHE.get(checkpoint_path)
+        if records is None:
+            records = latest_rows_by_key(checkpoint_path)
+            if not records:
+                records = latest_rows_by_key(results_path)
+            _GENERATION_RECORD_CACHE[checkpoint_path] = records
+        saved = records.get(key)
+        if not saved:
+            return
+        updated = dict(saved)
+        updated["downloaded_path"] = str(local_path)
+        updated["file_size"] = local_path.stat().st_size
+        append_jsonl_row(checkpoint_path, updated)
+        records[key] = updated
+
+
+def generation_checkpoint_path(results_path: Path) -> Path:
+    if results_path.name == "image_generation_results.jsonl":
+        return results_path.with_name("image_generation_checkpoint.jsonl")
+    return results_path
+
+
+def latest_rows_by_key(path: Path) -> dict[str, dict[str, Any]]:
+    latest: dict[str, dict[str, Any]] = {}
+    for saved in read_jsonl_if_exists(path):
+        key = record_key(saved)
+        if key:
+            latest[key] = saved
+    return latest
+
+
+def append_jsonl_row(path: Path, row: dict[str, Any]) -> None:
+    """Append one durable state transition without rewriting prior history."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    prefix = ""
+    if path.is_file() and path.stat().st_size:
+        with path.open("rb") as existing:
+            existing.seek(-1, os.SEEK_END)
+            if existing.read(1) not in {b"\n", b"\r"}:
+                prefix = "\n"
+    with path.open("a", encoding="utf-8") as handle:
+        handle.write(prefix + json.dumps(row, ensure_ascii=False) + "\n")
+
+
+def sync_generation_results(config: OssUploadConfig) -> None:
+    """Compact updated local JPG paths into the generation summary once per run."""
+    if not config.image_results_path:
+        return
+    results_path = Path(config.image_results_path).resolve()
+    checkpoint_path = generation_checkpoint_path(results_path)
+    if not results_path.is_file() or not checkpoint_path.is_file():
+        return
+    try:
+        with _IMAGE_RESULT_UPDATE_LOCK:
+            checkpoint_rows = _GENERATION_RECORD_CACHE.get(checkpoint_path)
+            if checkpoint_rows is None:
+                checkpoint_rows = latest_rows_by_key(checkpoint_path)
+                _GENERATION_RECORD_CACHE[checkpoint_path] = checkpoint_rows
+            rows = read_jsonl_if_exists(results_path)
             changed = False
-            for saved in records:
-                if record_key(saved) == key:
-                    saved["downloaded_path"] = str(local_path)
-                    saved["file_size"] = local_path.stat().st_size
-                    changed = True
+            for saved in rows:
+                current = checkpoint_rows.get(record_key(saved))
+                if not current or not current.get("downloaded_path"):
+                    continue
+                for field in ("downloaded_path", "file_size"):
+                    if saved.get(field) != current.get(field):
+                        saved[field] = current.get(field)
+                        changed = True
             if changed:
-                temporary = path.with_suffix(path.suffix + ".tmp")
-                write_jsonl_rows(records, temporary)
-                temporary.replace(path)
+                temporary = results_path.with_suffix(results_path.suffix + ".tmp")
+                write_jsonl_rows(rows, temporary)
+                temporary.replace(results_path)
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        print(f"警告: 生成结果路径汇总暂未同步，将在下次续跑重试: {exc}", flush=True)
 
 
 def render_template(template: str, **values: str) -> str:
@@ -606,11 +662,15 @@ def read_jsonl_if_exists(path: str | Path) -> list[dict[str, Any]]:
     if not path.exists():
         return []
     rows = []
-    with path.open("r", encoding="utf-8") as handle:
-        for line in handle:
-            line = line.strip()
-            if line:
-                rows.append(json.loads(line))
+    lines = path.read_text(encoding="utf-8").splitlines()
+    nonempty = [(index, line.strip()) for index, line in enumerate(lines) if line.strip()]
+    for position, (line_number, line) in enumerate(nonempty):
+        try:
+            rows.append(json.loads(line))
+        except json.JSONDecodeError:
+            if position == len(nonempty) - 1:
+                break
+            raise ValueError(f"JSONL中间记录损坏: {path}:{line_number + 1}")
     return rows
 
 

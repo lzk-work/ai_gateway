@@ -148,11 +148,24 @@ def test_bad_inputs_block_without_generation(workspace, alter):
     assert planned['errors'] and not planned['tasks']
 
 
-def upload_rows(record, count=None):
+def upload_rows(record, count=None, extension='png'):
     tasks=record['tasks'] if count is None else record['tasks'][:count]
     return [{'sku':record['record_id'],'image_name':t['image_name'],'status':'success',
-        'oss_key':f"{record['oss_directory']['prefix']}/{t['image_name']}.png",
-        'oss_url':f"{OSS}/SOURCE/{t['image_name']}.png"} for t in tasks]
+        'oss_key':f"{record['oss_directory']['prefix']}/{t['image_name']}.{extension}",
+        'oss_url':f"{OSS}/SOURCE/{t['image_name']}.{extension}"} for t in tasks]
+
+
+def test_jpeg_uploads_are_used_in_final_image_set(workspace):
+    _, write = workspace
+    write([row(False, 1)])
+    records = w.prepare()
+    paths = w.batch_paths()
+    w.save_jsonl(paths['sub_oss_checkpoint'], upload_rows(records[0], extension='jpg'))
+    payloads, manifests = w.build_results(records, paths)
+    generated = [item for item in manifests if item['origin'] == 'generated']
+    assert generated and all(item['url'] and item['oss_key'].endswith('.jpg') for item in generated)
+    assert len(generated) == len(records[0]['tasks'])
+    assert payloads[0]['complete']
 
 
 def test_complete_three_outputs_and_resume_cumulative(workspace):

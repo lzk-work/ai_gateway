@@ -30,7 +30,7 @@
   "execution": {
     "max_records": 1500,
     "image_concurrency": 15,
-    "oss_concurrency": 15
+    "oss_concurrency": 20
   },
   "review": {
     "max_skus_per_file": 1000
