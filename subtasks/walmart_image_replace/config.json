@@ -6,7 +6,7 @@
     "sheet_name": "Sheet1"
   },
   "execution": {
-    "max_records": 1000,
+    "max_records": 10000,
     "concurrency": 5,
     "image_concurrency": 5,
     "oss_concurrency": 5
