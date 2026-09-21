@@ -25,7 +25,8 @@ review_spec = importlib.util.spec_from_file_location(
 )
 review = importlib.util.module_from_spec(review_spec)
 assert review_spec.loader is not None
-review_spec.loader.exec_module(review)
+with patch.dict(sys.modules, {"workflow_common": replication}):
+    review_spec.loader.exec_module(review)
 from ai_gateway.subtasks.mxapi_generate_images import load_config, load_work_rows
 from ai_gateway.subtasks.mxapi_generate_images import image_kind_enabled, sku_target_count, sku_targets_from_complete_rows
 
@@ -55,7 +56,8 @@ class ReplicationWorkflowTests(unittest.TestCase):
         )
         workflow_module = importlib.util.module_from_spec(workflow_spec)
         assert workflow_spec.loader is not None
-        workflow_spec.loader.exec_module(workflow_module)
+        with patch.dict(sys.modules, {"workflow_common": replication}):
+            workflow_spec.loader.exec_module(workflow_module)
         config = {
             "workflow": {},
             "scheduler": {

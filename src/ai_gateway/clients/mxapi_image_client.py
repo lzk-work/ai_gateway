@@ -11,6 +11,61 @@ import requests
 from ai_gateway.config.loader import GatewayConfig
 
 
+def validate_image_bytes(content: bytes) -> str:
+    """Return the detected raster format or reject HTML/JSON/truncated downloads."""
+    if len(content) < 12:
+        raise RuntimeError(f"invalid image content: response is too small ({len(content)} bytes)")
+    if content.startswith(b"\x89PNG\r\n\x1a\n"):
+        if len(content) < 24 or int.from_bytes(content[16:20], "big") <= 0 or int.from_bytes(content[20:24], "big") <= 0:
+            raise RuntimeError("invalid image content: malformed PNG header")
+        if b"IEND" not in content[-32:]:
+            raise RuntimeError("invalid image content: truncated PNG")
+        return "png"
+    if content.startswith(b"\xff\xd8\xff"):
+        if not content.rstrip().endswith(b"\xff\xd9"):
+            raise RuntimeError("invalid image content: truncated JPEG")
+        return "jpeg"
+    if content.startswith((b"GIF87a", b"GIF89a")):
+        if not content.rstrip().endswith(b";"):
+            raise RuntimeError("invalid image content: truncated GIF")
+        return "gif"
+    if content.startswith(b"RIFF") and content[8:12] == b"WEBP":
+        declared_size = int.from_bytes(content[4:8], "little") + 8
+        if declared_size > len(content):
+            raise RuntimeError("invalid image content: truncated WebP")
+        return "webp"
+    if content.startswith(b"BM"):
+        return "bmp"
+    if content.startswith((b"II*\x00", b"MM\x00*")):
+        return "tiff"
+    preview = content[:120].decode("utf-8", errors="replace").replace("\r", " ").replace("\n", " ")
+    raise RuntimeError(f"invalid image content: unrecognized file signature; body={preview!r}")
+
+
+def validate_image_file(path: str | Path) -> bool:
+    try:
+        image_path = Path(path)
+        size = image_path.stat().st_size
+        if size < 12:
+            return False
+        with image_path.open("rb") as handle:
+            head = handle.read(32)
+            handle.seek(max(size - 32, 0))
+            tail = handle.read(32)
+        if head.startswith(b"\x89PNG\r\n\x1a\n"):
+            return len(head) >= 24 and int.from_bytes(head[16:20], "big") > 0 \
+                and int.from_bytes(head[20:24], "big") > 0 and b"IEND" in tail
+        if head.startswith(b"\xff\xd8\xff"):
+            return tail.rstrip().endswith(b"\xff\xd9")
+        if head.startswith((b"GIF87a", b"GIF89a")):
+            return tail.rstrip().endswith(b";")
+        if head.startswith(b"RIFF") and head[8:12] == b"WEBP":
+            return int.from_bytes(head[4:8], "little") + 8 <= size
+        return head.startswith((b"BM", b"II*\x00", b"MM\x00*"))
+    except (OSError, RuntimeError):
+        return False
+
+
 class MxapiImageClient:
     def __init__(self, gateway: GatewayConfig, submit_endpoint: str, query_endpoint: str) -> None:
         self.gateway = gateway
@@ -64,9 +119,12 @@ class MxapiImageClient:
         content = response.content
         if not content:
             raise RuntimeError("downloaded file is empty")
+        validate_image_bytes(content)
         path = Path(path)
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_bytes(content)
+        temporary_path = path.with_suffix(path.suffix + ".part")
+        temporary_path.write_bytes(content)
+        temporary_path.replace(path)
         size = path.stat().st_size
         if size <= 0:
             raise RuntimeError("saved file is empty")

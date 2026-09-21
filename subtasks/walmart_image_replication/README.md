@@ -68,3 +68,4 @@ python subtasks/walmart_image_replication/05_export_replication_review.py --batc
 TUZI 使用 `/v1/videos` 异步提交与查询。新提交取得 task_id 后结束本轮；后续轮次查询并下载完成结果。已有成功图片不会重复生成。
 
 复刻项目拥有独立的总配置、阶段配置、主图提示词、副图提示词和批次目录。修改 `walmart_image_prompt` 的业务文件不会改变本项目行为；两个项目只共享底层网关、图片客户端、断点续跑和 OSS 通用代码。
+新复刻图片在 OSS 上传阶段按总配置 `oss.image_output` 转为高质量 JPEG；上传成功并更新断点后删除本地源 PNG、保留 JPG。透明图片保持 PNG，历史 OSS 图片不迁移。

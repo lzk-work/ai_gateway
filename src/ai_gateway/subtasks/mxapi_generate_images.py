@@ -1,4 +1,4 @@
-﻿"""Generate images with MXAPI gpt-image-2 from prepared workbook rows."""
+"""Generate images with MXAPI gpt-image-2 from prepared workbook rows."""
 
 from __future__ import annotations
 
@@ -19,7 +19,7 @@ from typing import Any
 
 from openpyxl import load_workbook
 
-from ai_gateway.clients.mxapi_image_client import MxapiImageClient
+from ai_gateway.clients.mxapi_image_client import MxapiImageClient, validate_image_bytes, validate_image_file
 from ai_gateway.clients.image_providers import MxapiImageAdapter, SubmissionUnknown, create_image_adapter
 from ai_gateway.config.loader import load_app_config
 from ai_gateway.retry_policy import gateway_max_attempts, is_retryable_error
@@ -27,6 +27,53 @@ from ai_gateway.validators.result_validator import extract_json
 
 
 _CONSOLE_LOCK = threading.RLock()
+
+
+class RequestStartLimiter:
+    """Space request starts across all SKU workers, without locking responses."""
+
+    def __init__(self, interval_seconds: float):
+        self.interval = max(float(interval_seconds), 0.0)
+        self.lock = threading.Lock()
+        self.next_start = 0.0
+
+    def wait(self) -> None:
+        with self.lock:
+            delay = self.next_start - time.monotonic()
+            if delay > 0:
+                time.sleep(delay)
+            self.next_start = time.monotonic() + self.interval
+
+
+class RateLimitedImageClient:
+    """Use one shared start limiter for submissions, queries and their retries."""
+
+    def __init__(self, client, interval_seconds: float):
+        self.client = client
+        self.limiter = RequestStartLimiter(interval_seconds)
+
+    def __getattr__(self, name):
+        return getattr(self.client, name)
+
+    def submit(self, payload):
+        self.limiter.wait()
+        return self.client.submit(payload)
+
+    def query(self, task_id):
+        self.limiter.wait()
+        return self.client.query(task_id)
+
+    def download(self, url, path, **kwargs):
+        self.limiter.wait()
+        return self.client.download(url, path, **kwargs)
+
+
+class ImageDownloadError(RuntimeError):
+    """Generation completed, but its result could not be saved locally."""
+
+
+class ImageDownloadRateLimited(ImageDownloadError):
+    """Defer this image alone to the next cycle on download HTTP 429."""
 
 
 def print(*args, **kwargs) -> None:
@@ -67,6 +114,7 @@ class MxapiGenerateImagesConfig:
     max_permanent_retries: int = 3
     max_download_retries: int = 2
     retry_delay_seconds: int = 5
+    download_retry_delay_seconds: float | None = None
     query_attempts_per_cycle: int = 3
     query_retry_delay_seconds: float = 5.0
     skip_success: bool = True
@@ -150,6 +198,7 @@ def load_config(path: str | Path, *, config_data: dict[str, Any] | None = None) 
         max_permanent_retries=int(retry.get("max_permanent_retries", 3)),
         max_download_retries=int(retry.get("max_download_retries", 2)),
         retry_delay_seconds=int(retry.get("retry_delay_seconds", 5)),
+        download_retry_delay_seconds=(float(retry["download_retry_delay_seconds"]) if "download_retry_delay_seconds" in retry else None),
         query_attempts_per_cycle=int(retry.get("query_attempts_per_cycle", 3)),
         query_retry_delay_seconds=float(retry.get("query_retry_delay_seconds", 5.0)),
         skip_success=bool(resume.get("skip_success", True)),
@@ -265,6 +314,8 @@ def run(config: MxapiGenerateImagesConfig) -> list[ImageGenerationRecord]:
     app_config = load_app_config(config.gateways_path, config.models_path)
     gateway_config = app_config.gateways[config.gateway]
     client = create_image_adapter(config.provider, gateway_config, config.submit_endpoint, config.query_endpoint)
+    client = RateLimitedImageClient(client, config.submit_delay_seconds)
+    print(f"图片API全局请求启动间隔: {config.submit_delay_seconds:g} 秒（提交、查询及重试共享；响应并发等待）", flush=True)
     if config.provider == "tuzi":
         gateway_config.api_key()  # Fail before recording submission intent if credentials are absent.
 
@@ -286,18 +337,22 @@ def run(config: MxapiGenerateImagesConfig) -> list[ImageGenerationRecord]:
     target_by_sku = sku_targets_from_complete_rows(config, active_rows)
     completed = completed_keys(existing_records, config.max_regenerations_per_image) if config.skip_success else set()
     pending_rows = [row for row in active_rows if row_key(row) not in completed]
-    local_success_count = len(active_rows) - len(pending_rows)
+    success_count_by_sku: dict[str, int] = {}
+    for saved in existing_records:
+        if record_key(saved) not in active_keys or not is_completed_success(saved):
+            continue
+        sku = str(saved.get("sku") or "").strip()
+        if sku:
+            success_count_by_sku[sku] = success_count_by_sku.get(sku, 0) + 1
+    # Fallback candidates can leave more successful files than desired.  The
+    # progress summary reports successes that count toward the configured goal,
+    # so it must never exceed the final target.
+    local_success_count = sum(
+        min(count, target_by_sku.get(sku, count))
+        for sku, count in success_count_by_sku.items()
+    )
     completed_sku_candidate_count = 0
     if config.skip_success and config.desired_count:
-        success_count_by_sku: dict[str, int] = {}
-        for saved in existing_records:
-            if record_key(saved) not in active_keys:
-                continue
-            if not is_completed_success(saved):
-                continue
-            sku = str(saved.get("sku") or "").strip()
-            if sku:
-                success_count_by_sku[sku] = success_count_by_sku.get(sku, 0) + 1
         # Exclude the unused fallback candidates of already-complete SKUs before
         # max_records is applied. Otherwise those rows can consume the SKU limit
         # and starve genuinely incomplete SKUs forever on every resumed run.
@@ -564,7 +619,7 @@ def is_completed_success(row: dict[str, Any]) -> bool:
         return False
     if isinstance(expected_size, int) and expected_size > 0 and actual_size != expected_size:
         return False
-    return True
+    return validate_image_file(path)
 
 
 def apply_checkpoint_to_rows(rows: list[dict[str, Any]], checkpoint_rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -670,7 +725,7 @@ def process_rows(
             1
             for saved in checkpoint_store.rows()
             if str(saved.get("sku") or "").strip() == sku
-            and saved.get("status") == "success"
+            and is_completed_success(saved)
             and (active_keys is None or record_key(saved) in active_keys)
         )
         existing_task_count = sum(1 for row in sku_rows if row.get("task_id"))
@@ -893,9 +948,11 @@ def process_one(
         error_msg = str(exc)
         if task_id and is_expired_result_error(error_msg):
             expired_attempts = int(row.get("attempts", 0) or 0)
-            if expired_attempts < 1:
+            regeneration_limit = max(int(config.max_regenerations_per_image), 0)
+            if expired_attempts < regeneration_limit:
                 print(
-                    f"[{index}/{total}] 旧任务结果已失效，重新生成一次 | SKU={sku} | "
+                    f"[{index}/{total}] 旧任务图片无效，重新生成 "
+                    f"({expired_attempts + 1}/{regeneration_limit}) | SKU={sku} | "
                     f"旧task_id={task_id} | 原因={short_error(error_msg)}",
                     flush=True,
                 )
@@ -909,7 +966,17 @@ def process_one(
             record.retryable = False
             checkpoint_store.upsert(record)
             print(
-                f"[{index}/{total}] 结果再次失效，停止自动重新生成 | SKU={sku} | task_id={task_id}",
+                f"[{index}/{total}] 图片无效且已达重新生成上限 | SKU={sku} | "
+                f"task_id={task_id} | 已重新生成={expired_attempts}次",
+                flush=True,
+            )
+            return record
+        if task_id and isinstance(exc, ImageDownloadError):
+            record = build_pending_record(row, error_msg, task_id=task_id, submit_latency_ms=submit_latency_ms)
+            checkpoint_store.upsert(record)
+            print(
+                f"[{index}/{total}] 下载未完成(保留task_id待重试) | SKU={sku} | "
+                f"task_id={task_id} | 错误={short_error(error_msg)}",
                 flush=True,
             )
             return record
@@ -950,8 +1017,6 @@ def submit_with_retry(client: MxapiImageClient, prompt: str, reference_image: st
     max_attempts = gateway_max_attempts(client.gateway)
     last_error: Exception | None = None
     for attempt in range(1, max_attempts + 1):
-        if config.submit_delay_seconds > 0:
-            time.sleep(config.submit_delay_seconds)
         try:
             response, latency_ms = client.submit(payload)
             task_id = client.parse_submit(response)
@@ -1090,7 +1155,7 @@ def is_expired_result_error(message: str) -> bool:
     """仅识别已取得的输出图片明确失效；查询 410/expired 由查询重试处理。"""
     text = " ".join(str(message).lower().split())
     download_gone = "download failed after trying" in text and (
-        "http 404" in text or "http 410" in text
+        "http 404" in text or "http 410" in text or "invalid image content" in text
     )
     return download_gone
 
@@ -1107,9 +1172,15 @@ def download_with_retry(client: MxapiImageClient, urls: list[str], path: Path, c
                 return size, url
             except Exception as exc:
                 per_url_error = exc
+                response = getattr(exc, "response", None)
+                limited = getattr(response, "status_code", None) == 429 or "HTTP 429" in str(exc)
+                if limited:
+                    # Do not retry other URLs or affect unrelated workers.
+                    raise ImageDownloadRateLimited(f"下载 HTTP 429，本轮停止该图片下载，下一轮重试: {exc}") from exc
                 if attempt >= config.max_download_retries:
                     break
-                time.sleep(config.retry_delay_seconds * attempt)
+                fixed_delay = getattr(config, "download_retry_delay_seconds", None)
+                time.sleep(fixed_delay if fixed_delay is not None else config.retry_delay_seconds * attempt)
         tried.append(f"url#{url_index}({str(url)[:60]}): {per_url_error}")
         last_error = per_url_error
     raise RuntimeError(f"download failed after trying {len(urls)} url(s): {last_error}; " + " | ".join(tried))
@@ -1121,6 +1192,8 @@ def save_image_result(client, result, path: Path, config: MxapiGenerateImagesCon
     if result.urls:
         try:
             return download_with_retry(client, result.urls, path, config)
+        except ImageDownloadRateLimited:
+            raise
         except Exception as exc:
             url_error = exc
     for encoded in result.b64_images:
@@ -1129,14 +1202,17 @@ def save_image_result(client, result, path: Path, config: MxapiGenerateImagesCon
             content = base64.b64decode(compact, validate=True)
             if not content:
                 raise ValueError("decoded Base64 image is empty")
+            validate_image_bytes(content)
             path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_bytes(content)
+            temporary_path = path.with_suffix(path.suffix + ".part")
+            temporary_path.write_bytes(content)
+            temporary_path.replace(path)
             return path.stat().st_size, None
         except (ValueError, binascii.Error) as exc:
             url_error = exc
     if url_error:
-        raise RuntimeError(f"unable to save URL/Base64 image result: {url_error}") from url_error
-    raise RuntimeError("result contains no usable URL or Base64 image")
+        raise ImageDownloadError(f"unable to save URL/Base64 image result: {url_error}") from url_error
+    raise ImageDownloadError("result contains no usable URL or Base64 image")
 
 
 def save_raw_response(config: MxapiGenerateImagesConfig, image_name: str, payload: dict[str, Any]) -> None:

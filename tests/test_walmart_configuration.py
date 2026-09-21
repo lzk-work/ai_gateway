@@ -245,11 +245,16 @@ class ConfigurationTests(unittest.TestCase):
             switches = workflow.workflow_switches()
             self.assertTrue(switches["call_prompt_model"])
 
-    def test_legacy_replace_config_still_loads(self):
-        path = ROOT / "subtasks/walmart_image_replace/stages/generate_images/config.json"
-        config = images.load_config(path)
-        self.assertEqual(config.provider, "mxapi")
-        self.assertEqual(config.gateway, "mxapi")
+    def test_replace_provider_is_owned_by_business_config(self):
+        task = ROOT / "subtasks/walmart_image_replace"
+        business = json.loads((task / "config.json").read_text(encoding="utf-8-sig"))
+        for stage in ("generate_images", "generate_main_image"):
+            data = json.loads((task / "stages" / stage / "config.json").read_text(encoding="utf-8-sig"))
+            self.assertNotIn("gateway", data["execution"])
+        self.assertIn(business["image_provider"], {"tuzi", "mxapi"})
+        self.assertNotIn("walmart_api", business)
+        self.assertNotIn("submit_replace", business["workflow"])
+        self.assertNotIn("reconcile", business["workflow"])
 
     def test_full_previews_without_network_or_batch_writes(self):
         original = workflow.load_task_config()

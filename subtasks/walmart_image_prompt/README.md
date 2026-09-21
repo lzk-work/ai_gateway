@@ -189,6 +189,8 @@ python subtasks/walmart_image_prompt/99_batch_stats.py
 
 主图和副图使用独立 checkpoint。已成功上传的 `(SKU, image_name)` 会跳过；对象 key 按配置生成，当前 `overwrite=true`。
 
+`03b` 的主图任务 Excel 已存在时会直接复用，避免每轮重复构建。源数据或主图固定提示词变化后，如需重建，只需删除批次目录下的 `03b_build_main_image_input/walmart_main_image_input_result.xlsx`；下次运行会自动生成，独立 checkpoint 仍会保留断点状态。
+
 `max_records` 按 SKU 数控制，而不是图片行数。每个 SKU 当前展开为 1 个主图任务和 6 个副图任务。
 
 ## 结果口径
@@ -231,3 +233,7 @@ python subtasks/walmart_image_prompt/scripts/list_buzz_models.py
 - 生成或覆盖业务 JSONL、Excel、图片文件。
 
 正式执行前应先检查 dry-run 输出中的批次名、SKU 数、已成功跳过数、待处理数、阶段开关和并发参数。
+图片 API 限速：`limits.submit_delay_seconds` 控制提交与查询共享的全局请求启动间隔（包括重试），不再是各线程独立睡眠。响应仍并发等待；单任务查询重试间隔保持原配置。该限速适用于共用图片执行模块的生成及复刻流程，作用范围为单个运行进程。
+图片下载也共享全局请求启动限速。某张图片下载返回 HTTP 429 时，立即停止该图片本轮下载，不尝试其他 URL；保留原 task_id，下一轮继续查询下载，不重新生图、不增加重新生成次数。其他图片正常处理，不全局暂停。下载网络故障耗尽重试后同样保留 task_id，提示“下载未完成”。明确失效的图片仍按既有重新生成上限处理。
+下载重试：主图和副图均最多尝试 5 次（含首次），普通失败后使用 `retry.download_retry_delay_seconds=3` 固定等待 3 秒，最多等待 4 次。该字段只影响下载；未配置的其他业务保留原递增等待逻辑。429 仍立即结束当前图片本轮下载，临时镜像补丁规则不变。
+新生成图片在 OSS 上传阶段按总配置 `oss.image_output` 处理：普通 PNG 转为 JPEG（默认 quality=95、关闭色度降采样），上传成功并同步更新生成断点后删除本地源 PNG，保留本地 JPG；透明图片按 `keep_png` 保持 PNG。历史已上传对象不迁移。

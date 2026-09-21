@@ -28,6 +28,7 @@
   },
   "retry": {
     "max_download_retries": 5,
+    "download_retry_delay_seconds": 3,
     "query_attempts_per_cycle": 3,
     "query_retry_delay_seconds": 5,
     "retry_delay_seconds": 5

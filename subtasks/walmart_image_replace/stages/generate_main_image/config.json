@@ -1,6 +1,6 @@
 {
-  "name": "generate_main_image",
-  "description": "主图固定提示词生成：读取 new_main_{sku} 入参，调用总配置选定的平台 生成主图并下载。",
+  "name": "replace_generate_main_image",
+  "description": "Replacement generate_main_image; dynamic persisted per-product plan.",
   "execution": {
     "model": {
       "name": "gpt-image-2-1k",
@@ -30,7 +30,6 @@
   },
   "retry": {
     "max_download_retries": 5,
-    "download_retry_delay_seconds": 3,
     "query_attempts_per_cycle": 3,
     "query_retry_delay_seconds": 5,
     "retry_delay_seconds": 10

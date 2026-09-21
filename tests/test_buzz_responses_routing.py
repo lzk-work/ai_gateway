@@ -1,4 +1,5 @@
 import unittest
+import json
 import sys
 from pathlib import Path
 from types import SimpleNamespace
@@ -80,6 +81,7 @@ class BuzzResponsesRoutingTests(unittest.TestCase):
 
     def test_responses_sse_parser_collects_text_and_requires_completion(self):
         gateway = SimpleNamespace(
+            name="buzz",
             base_url="https://buzz.invalid",
             auth_header="Authorization",
             timeout_seconds=30,
@@ -90,7 +92,7 @@ class BuzzResponsesRoutingTests(unittest.TestCase):
             'event: response.created',
             'data: {"type":"response.created","response":{"id":"resp_1","model":"gpt-5.6-terra","output":[]}}',
             'event: response.output_text.delta',
-            'data: {"type":"response.output_text.delta","delta":"{\\"ok\\":"}',
+            "data: " + json.dumps({"type": "response.output_text.delta", "delta": '{"ok":'}),
             'event: response.output_text.delta',
             'data: {"type":"response.output_text.delta","delta":"true}"}',
             'event: response.completed',
@@ -105,6 +107,7 @@ class BuzzResponsesRoutingTests(unittest.TestCase):
 
     def test_responses_sse_parser_rejects_incomplete_stream(self):
         gateway = SimpleNamespace(
+            name="buzz",
             base_url="https://buzz.invalid",
             auth_header="Authorization",
             timeout_seconds=30,

@@ -8,7 +8,7 @@ from replace_workflow_common import prepare, batch_paths, build_image_input
 def run(batch_name=None, dry_run=False):
     records = prepare(batch_name, dry_run)
     if not dry_run:
-        return build_image_input(records, batch_paths(batch_name), 'sub')
+        return build_image_input(records, batch_paths(batch_name), 'main')
     return []
 
 if __name__ == '__main__':

@@ -16,11 +16,26 @@ from ai_gateway.clients.image_providers import (
     create_image_adapter,
 )
 from ai_gateway.clients.image_batch import check_batch_provider
+from ai_gateway.clients.mxapi_image_client import validate_image_bytes, validate_image_file
 from ai_gateway.config.loader import GatewayConfig
 from ai_gateway.subtasks import mxapi_generate_images as engine
 
 
 class ProviderTests(unittest.TestCase):
+    def test_html_response_is_not_accepted_as_an_image(self):
+        html = b"<!doctype html><html><body>temporary CDN page</body></html>"
+        with self.assertRaisesRegex(RuntimeError, "invalid image content"):
+            validate_image_bytes(html)
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "fake.png"
+            path.write_bytes(html)
+            self.assertFalse(validate_image_file(path))
+            row = {
+                "sku": "sku", "image_name": "new_sub1_sku", "status": "success",
+                "downloaded_path": str(path), "file_size": len(html),
+            }
+            self.assertFalse(engine.is_completed_success(row))
+
     def setUp(self):
         self.cfg = SimpleNamespace(model="gpt-image-2", aspect_ratio="1:1", resolution="1K",
                                    size=None, quality="low", provider="tuzi",
@@ -83,13 +98,16 @@ class ProviderTests(unittest.TestCase):
             self.tuzi.parse_query({"status": "completed", "video_url": ""})
 
     def test_base64_result_is_saved_without_http_download(self):
-        encoded = base64.b64encode(b"png-test-data").decode("ascii")
+        image_bytes = base64.b64decode(
+            "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="
+        )
+        encoded = base64.b64encode(image_bytes).decode("ascii")
         parsed = ImagePollResult("completed", b64_images=[encoded])
         with tempfile.TemporaryDirectory() as tmp, patch.object(self.tuzi, "download") as download:
             path = Path(tmp) / "image.png"
             size, used_url = engine.save_image_result(self.tuzi, parsed, path, self.cfg)
-            self.assertEqual(path.read_bytes(), b"png-test-data")
-            self.assertEqual(size, len(b"png-test-data"))
+            self.assertEqual(path.read_bytes(), image_bytes)
+            self.assertEqual(size, len(image_bytes))
             self.assertIsNone(used_url)
             download.assert_not_called()
 
@@ -223,6 +241,7 @@ class ProviderTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             row, checkpoint = self.worker_setup(tmp)
             row.update(task_id="task_new", attempts=1)
+            self.cfg.max_regenerations_per_image = 1
             completed = {"status": "completed", "video_url": "https://image.test/gone"}
             with patch.object(self.tuzi, "query", return_value=(completed, 1)), \
                  patch.object(self.tuzi, "download", side_effect=RuntimeError("HTTP 404: gone")), \
@@ -418,13 +437,23 @@ class ProviderTests(unittest.TestCase):
             with self.assertRaises(RuntimeError):
                 check_batch_provider(root, "mxapi")
 
-    def test_legacy_batch(self):
+    def test_unlabelled_legacy_records_do_not_infer_provider(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             old = root / "04_generate_images" / "image_generation_checkpoint.jsonl"
             old.parent.mkdir()
             old.write_text("{}\n")
-            check_batch_provider(root, "mxapi")
+            self.assertEqual(check_batch_provider(root, "mxapi"), "mxapi")
+            self.assertEqual(check_batch_provider(root, "tuzi"), "tuzi")
+            self.assertFalse((root / "image_provider.json").exists())
+
+    def test_explicit_legacy_provider_prevents_switching(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            record = root / "04_generate_images" / "image_generation_checkpoint.jsonl"
+            record.parent.mkdir()
+            record.write_text('{"provider":"mxapi"}\n', encoding="utf-8")
+            self.assertEqual(check_batch_provider(root, "mxapi"), "mxapi")
             with self.assertRaises(RuntimeError):
                 check_batch_provider(root, "tuzi")
             self.assertFalse((root / "image_provider.json").exists())

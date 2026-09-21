@@ -241,6 +241,8 @@ def apply_batch_to_call_config(config):
 
 def apply_batch_to_image_config(config):
     apply_image_provider(config)
+    config.generate_main_images = False
+    config.generate_sub_images = True
     paths = batch_paths()
     config.input_excel_path = str(paths["image_input_excel"])
     config.model_results_path = str(paths["model_results"])
@@ -294,6 +296,8 @@ def build_main_image_input_config_for_batch() -> dict[str, Any]:
 
 def apply_batch_to_main_image_config(config):
     apply_image_provider(config)
+    config.generate_main_images = True
+    config.generate_sub_images = False
     paths = batch_paths()
     config.input_excel_path = str(paths["main_image_input_excel"])
     config.model_results_path = str(paths["model_results"])

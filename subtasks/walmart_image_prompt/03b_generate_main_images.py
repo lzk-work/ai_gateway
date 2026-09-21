@@ -44,7 +44,13 @@ def main() -> None:
 
     print("\n=== 03b-1 生成主图下载入参 ===")
     print_batch_info()
-    build_main_image_input(build_main_image_input_config_for_batch())
+    build_config = build_main_image_input_config_for_batch()
+    main_input_path = Path(build_config["output"]["excel_path"])
+    if main_input_path.is_file():
+        print(f"主图任务 Excel 已存在，直接复用: {main_input_path}")
+        print("如需按最新源数据或提示词重建，请删除该文件后重新运行。")
+    else:
+        build_main_image_input(build_config)
 
     print(f"\n=== 03b-2 调用 {image_provider().upper()} 生成主图（固定提示词）并下载 ===")
     execution = task_execution()

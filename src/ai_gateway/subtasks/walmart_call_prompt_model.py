@@ -807,7 +807,7 @@ def call_one(
                 print_call_start(index, total_pending, source_task, model_name, gateway_name)
             response_payload, latency_ms, result_text = _call_model(client, payload, config)
             full_output_path = save_full_output(config, task_id, sku, model_name, result_text)
-            json_parseable, image_plan_count, validation_error = inspect_result_text(result_text)
+            json_parseable, image_plan_count, validation_error = inspect_result_text(result_text, expected_count=metadata.get("expected_image_plan_count", 6))
             validation_status = "passed" if not validation_error else "failed"
             status = "success" if validation_status == "passed" else "invalid"
             return ModelCallRecord(
@@ -953,7 +953,7 @@ def build_continue_payload(
     messages = [
         {"role": "user", "content": content},
         {"role": "assistant", "content": previous_text},
-        {"role": "user", "content": CONTINUE_PROMPT},
+        {"role": "user", "content": CONTINUE_PROMPT.replace("6 个对象", str((next_payload.get("metadata") or {}).get("expected_image_plan_count", 6)) + " 个对象")},
     ]
     payload = {"model": model_name, "messages": messages}
     if temperature is not None:
@@ -1107,7 +1107,7 @@ def extract_stream_delta(event: dict[str, Any]) -> str:
     return ""
 
 
-def inspect_result_text(text: str) -> tuple[bool, int, str | None]:
+def inspect_result_text(text: str, expected_count: int = 6) -> tuple[bool, int, str | None]:
     raw_mojibake_error = mojibake_reason(text)
     if raw_mojibake_error:
         return False, 0, f"{raw_mojibake_error} in full response"
@@ -1116,8 +1116,8 @@ def inspect_result_text(text: str) -> tuple[bool, int, str | None]:
         return False, 0, parse_error or "response JSON is not an object"
     image_plan = parsed.get("image_plan")
     image_plan_count = len(image_plan) if isinstance(image_plan, list) else 0
-    if image_plan_count != 6:
-        return True, image_plan_count, f"image_plan count expected 6, got {image_plan_count}"
+    if image_plan_count != expected_count:
+        return True, image_plan_count, f"image_plan count expected {expected_count}, got {image_plan_count}"
     mojibake_error = detect_mojibake(parsed)
     if mojibake_error:
         return True, image_plan_count, mojibake_error

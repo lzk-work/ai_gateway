@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any
 
 from openpyxl import load_workbook
+from PIL import Image
 
 from ai_gateway.clients.aliyun_oss_client import (
     AliyunOssClient,
@@ -20,6 +21,10 @@ from ai_gateway.clients.aliyun_oss_client import (
     load_aliyun_oss_config,
 )
 from ai_gateway.config.loader import load_local_env
+from ai_gateway.clients.mxapi_image_client import validate_image_file
+
+
+_IMAGE_RESULT_UPDATE_LOCK = threading.Lock()
 
 
 @dataclass(slots=True)
@@ -42,6 +47,12 @@ class OssUploadConfig:
     batch_size: int = 500
     skip_success: bool = True
     image_results_path: str | None = None
+    output_format: str = "original"
+    jpeg_quality: int = 95
+    jpeg_subsampling: int = 0
+    jpeg_optimize: bool = True
+    transparent_policy: str = "keep_png"
+    delete_source_after_upload: bool = False
 
 
 @dataclass(slots=True)
@@ -101,6 +112,14 @@ def load_config(path: str | Path, *, config_data: dict[str, Any] | None = None) 
     oss = data.get("oss", {})
     limits = data.get("limits", {})
     resume = data.get("resume", {})
+    image_output = data.get("image_output") or oss.get("image_output") or {}
+    if not image_output:
+        # Stage configs may keep business policy in the task-level config.
+        # Resolve it only from this stage's own directory; never scan batches.
+        task_config_path = path.resolve().parents[2] / "config.json" if len(path.resolve().parents) > 2 else None
+        if task_config_path and task_config_path.is_file():
+            task_data = json.loads(task_config_path.read_text(encoding="utf-8-sig"))
+            image_output = (task_data.get("oss") or {}).get("image_output") or {}
     return OssUploadConfig(
         name=data["name"],
         project_root=str(project_root),
@@ -119,6 +138,12 @@ def load_config(path: str | Path, *, config_data: dict[str, Any] | None = None) 
         concurrency=int(limits.get("max_workers", 5)),
         batch_size=int(limits.get("batch_size", 500)),
         skip_success=bool(resume.get("skip_success", True)),
+        output_format=str(image_output.get("format", "original")).strip().lower(),
+        jpeg_quality=int(image_output.get("quality", 95)),
+        jpeg_subsampling=int(image_output.get("subsampling", 0)),
+        jpeg_optimize=bool(image_output.get("optimize", True)),
+        transparent_policy=str(image_output.get("transparent_policy", "keep_png")).strip().lower(),
+        delete_source_after_upload=bool(image_output.get("delete_source_after_upload", False)),
     )
 
 
@@ -126,7 +151,7 @@ def run(config: OssUploadConfig) -> list[OssUploadRecord]:
     rows, workbook, sheet, headers = load_work_rows(config)
     checkpoint = CheckpointStore(config.checkpoint_path)
     existing = checkpoint.rows()
-    completed = completed_keys(existing) if config.skip_success else set()
+    completed = completed_keys(existing, rows) if config.skip_success else set()
     pending = [row for row in rows if row_key(row) not in completed]
     if config.max_records and config.max_records > 0:
         pending = limit_rows_by_sku(pending, config.max_records)
@@ -156,7 +181,7 @@ def preview(config: OssUploadConfig) -> None:
         return
     rows, _, _, _ = load_work_rows(config)
     existing = read_jsonl_if_exists(config.checkpoint_path)
-    completed = completed_keys(existing) if config.skip_success else set()
+    completed = completed_keys(existing, rows) if config.skip_success else set()
     pending = [row for row in rows if row_key(row) not in completed]
     selected = limit_rows_by_sku(pending, config.max_records)
 
@@ -220,14 +245,16 @@ def load_work_rows(config: OssUploadConfig):
         if unique_key in seen_keys:
             continue
         seen_keys.add(unique_key)
-        local_path = Path(config.download_dir) / image_file_name(image_name)
-        oss_key = render_template(config.key_template, sku=sku, image_name=Path(image_file_name(image_name)).stem)
+        source_path = Path(config.download_dir) / image_file_name(image_name)
+        local_path, extension = planned_output(source_path, config)
+        oss_key = render_template(config.key_template, sku=sku, image_name=source_path.stem, extension=extension)
         rows.append(
             {
                 "row_number": row_number,
                 "sku": sku,
                 "image_name": image_name,
                 "local_path": str(local_path),
+                "source_path": str(source_path),
                 "oss_key": oss_key,
             }
         )
@@ -249,8 +276,9 @@ def load_work_rows_from_image_results(config: OssUploadConfig, sheet, headers: d
         if unique_key in seen_keys:
             continue
         seen_keys.add(unique_key)
-        local_path = row.get("downloaded_path") or str(Path(config.download_dir) / image_file_name(image_name))
-        oss_key = render_template(config.key_template, sku=sku, image_name=Path(image_file_name(image_name)).stem)
+        source_path = Path(row.get("downloaded_path") or str(Path(config.download_dir) / image_file_name(image_name)))
+        local_path, extension = planned_output(source_path, config)
+        oss_key = render_template(config.key_template, sku=sku, image_name=source_path.stem, extension=extension)
         row_number = row.get("row_number")
         rows.append(
             {
@@ -258,6 +286,7 @@ def load_work_rows_from_image_results(config: OssUploadConfig, sheet, headers: d
                 "sku": sku,
                 "image_name": image_name,
                 "local_path": str(local_path),
+                "source_path": str(source_path),
                 "oss_key": oss_key,
             }
         )
@@ -301,12 +330,22 @@ def process_one(
     checkpoint: CheckpointStore,
 ) -> OssUploadRecord:
     sku = row["sku"]
+    source_path = Path(row.get("source_path") or row["local_path"])
     local_path = Path(row["local_path"])
     print(f"[{index}/{total}] 开始上传 | SKU={sku} | 图片={local_path.name}", flush=True)
-    if not local_path.is_file():
-        record = build_record(row, "missing_file", None, f"本地图片不存在: {local_path}", retryable=False)
+    try:
+        local_path, extension = prepare_upload_image(source_path, config)
+        row["local_path"] = str(local_path)
+        row["oss_key"] = str(Path(str(row["oss_key"])).with_suffix("." + extension)).replace("\\", "/")
+    except Exception as exc:
+        record = build_record(row, "conversion_failed", None, f"图片转码失败: {exc}", retryable=True)
         checkpoint.upsert(record)
-        print(f"[{index}/{total}] 上传失败 | SKU={sku} | 错误=本地图片不存在", flush=True)
+        print(f"[{index}/{total}] 上传失败 | SKU={sku} | 错误={short_error(record.error_message or '')}", flush=True)
+        return record
+    if not validate_image_file(local_path):
+        record = build_record(row, "invalid_file", None, f"本地文件不是有效图片: {local_path}", retryable=False)
+        checkpoint.upsert(record)
+        print(f"[{index}/{total}] 上传失败 | SKU={sku} | 错误=本地文件不是有效图片", flush=True)
         return record
 
     result = client.upload_file(local_path, row["oss_key"], overwrite=config.overwrite)
@@ -315,6 +354,12 @@ def process_one(
         url = client.public_url(row["oss_key"])
         record = build_record(row, status, url, None, retryable=False, file_size=result.get("size"))
         checkpoint.upsert(record)
+        if config.delete_source_after_upload and source_path != local_path and source_path.is_file():
+            try:
+                update_generation_local_path(config, row, local_path)
+                source_path.unlink()
+            except OSError as exc:
+                print(f"[{index}/{total}] 警告 | SKU={sku} | OSS已成功，但删除源图失败: {exc}", flush=True)
         label = "已存在跳过" if status == "skipped" else "上传成功"
         print(f"[{index}/{total}] {label} | SKU={sku} | URL={url}", flush=True)
         return record
@@ -423,6 +468,72 @@ def image_file_name(image_name: str) -> str:
     return image_name if suffix else f"{image_name}.png"
 
 
+def _has_transparency(path: Path) -> bool:
+    with Image.open(path) as image:
+        return image.mode in {"RGBA", "LA"} or (image.mode == "P" and "transparency" in image.info)
+
+
+def planned_output(source_path: Path, config: OssUploadConfig) -> tuple[Path, str]:
+    if config.output_format in {"jpeg", "jpg"}:
+        if source_path.is_file() and config.transparent_policy == "keep_png" and _has_transparency(source_path):
+            return source_path, source_path.suffix.lstrip(".").lower() or "png"
+        return source_path.with_suffix(".jpg"), "jpg"
+    return source_path, source_path.suffix.lstrip(".").lower() or "png"
+
+
+def prepare_upload_image(source_path: Path, config: OssUploadConfig) -> tuple[Path, str]:
+    planned, extension = planned_output(source_path, config)
+    if not source_path.is_file():
+        if planned.is_file() and validate_image_file(planned):
+            return planned, extension
+        raise RuntimeError(f"本地图片不存在: {source_path}")
+    if not validate_image_file(source_path):
+        raise RuntimeError(f"本地文件不是有效图片: {source_path}")
+    if planned == source_path:
+        return source_path, extension
+    with Image.open(source_path) as image:
+        if _has_transparency(source_path):
+            rgba = image.convert("RGBA")
+            output = Image.new("RGB", rgba.size, "white")
+            output.paste(rgba, mask=rgba.getchannel("A"))
+        else:
+            output = image.convert("RGB")
+        temporary = planned.with_suffix(planned.suffix + ".part")
+        output.save(temporary, format="JPEG", quality=config.jpeg_quality,
+                    optimize=config.jpeg_optimize, subsampling=config.jpeg_subsampling)
+    if not validate_image_file(temporary):
+        temporary.unlink(missing_ok=True)
+        raise RuntimeError("转码输出不是有效图片")
+    temporary.replace(planned)
+    return planned, "jpg"
+
+
+def update_generation_local_path(config: OssUploadConfig, row: dict[str, Any], local_path: Path) -> None:
+    """Keep generation resume state valid before deleting its source PNG."""
+    if not config.image_results_path:
+        return
+    results_path = Path(config.image_results_path)
+    paths = [results_path]
+    if results_path.name == "image_generation_results.jsonl":
+        paths.append(results_path.with_name("image_generation_checkpoint.jsonl"))
+    key = row_key(row)
+    with _IMAGE_RESULT_UPDATE_LOCK:
+        for path in paths:
+            if not path.is_file():
+                continue
+            records = read_jsonl_if_exists(path)
+            changed = False
+            for saved in records:
+                if record_key(saved) == key:
+                    saved["downloaded_path"] = str(local_path)
+                    saved["file_size"] = local_path.stat().st_size
+                    changed = True
+            if changed:
+                temporary = path.with_suffix(path.suffix + ".tmp")
+                write_jsonl_rows(records, temporary)
+                temporary.replace(path)
+
+
 def render_template(template: str, **values: str) -> str:
     rendered = template
     for key, value in values.items():
@@ -466,12 +577,28 @@ def record_key(row: dict[str, Any]) -> str:
     return f"{sku}::{image_name}" if sku and image_name else ""
 
 
-def completed_keys(rows: list[dict[str, Any]]) -> set[str]:
-    return {
-        record_key(row)
-        for row in rows
-        if row.get("status") in {"success", "skipped"} and record_key(row)
-    }
+def completed_keys(
+    rows: list[dict[str, Any]],
+    work_rows: list[dict[str, Any]] | None = None,
+) -> set[str]:
+    current = {record_key(row): row for row in (work_rows or []) if record_key(row)}
+    completed: set[str] = set()
+    for row in rows:
+        key = record_key(row)
+        if row.get("status") not in {"success", "skipped"} or not key:
+            continue
+        work = current.get(key)
+        if work:
+            # Prefer the exact file that was uploaded. This keeps historical
+            # PNG successes complete after future batches switch to JPEG.
+            path = Path(str(row.get("local_path") or work.get("local_path") or ""))
+            if not path.is_file() or not validate_image_file(path):
+                continue
+            previous_size = row.get("file_size")
+            if isinstance(previous_size, int) and previous_size > 0 and path.stat().st_size != previous_size:
+                continue
+        completed.add(key)
+    return completed
 
 
 def read_jsonl_if_exists(path: str | Path) -> list[dict[str, Any]]:

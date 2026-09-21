@@ -3,7 +3,7 @@
   "image_provider": "tuzi",
   "description": "使用产品主图和对应原副图直接复刻 Walmart 副图，不调用文本模型。",
   "input": {
-    "excel_path": "E:/WorkSpace/ai_gateway/subtasks/walmart_image_replication/input/develop_flow_260911_re.xlsx",
+    "excel_path": "E:/WorkSpace/ai_gateway/subtasks/walmart_image_replication/input/develop_flow_260919-re.xlsx",
     "sheet_name": "Sheet1",
     "columns": {
       "sku": "SKU",
@@ -21,7 +21,11 @@
     "max_regenerations_per_image": 4
   },
   "oss": {
-    "key_template": "develop/{sku}/{image_name}.png"
+    "key_template": "develop/{sku}/{image_name}.{extension}",
+    "image_output": {
+      "format": "jpeg", "quality": 95, "subsampling": 0, "optimize": true,
+      "transparent_policy": "keep_png", "delete_source_after_upload": true
+    }
   },
   "execution": {
     "max_records": 1500,

@@ -6,3 +6,9 @@ subtasks/*/stages/*/output/
 subtasks/*/batches/
 __pycache__/
 *.pyc
+# Local experiments, benchmark outputs, and runtime patches
+compression_test/
+scripts/output/
+temporary_patches/
+
+.pytest_cache/
