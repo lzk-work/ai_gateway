@@ -12,3 +12,6 @@ scripts/output/
 temporary_patches/
 
 .pytest_cache/
+
+# Subtask-local query and benchmark outputs
+subtasks/*/scripts/output/
