@@ -30,41 +30,48 @@ _CONSOLE_LOCK = threading.RLock()
 
 
 class RequestStartLimiter:
-    """Space request starts across all SKU workers, without locking responses."""
+    """Space request starts within each worker thread without blocking peers."""
 
     def __init__(self, interval_seconds: float):
         self.interval = max(float(interval_seconds), 0.0)
-        self.lock = threading.Lock()
-        self.next_start = 0.0
+        self.local = threading.local()
 
     def wait(self) -> None:
-        with self.lock:
-            delay = self.next_start - time.monotonic()
-            if delay > 0:
-                time.sleep(delay)
-            self.next_start = time.monotonic() + self.interval
+        next_start = getattr(self.local, "next_start", 0.0)
+        delay = next_start - time.monotonic()
+        if delay > 0:
+            time.sleep(delay)
+        self.local.next_start = time.monotonic() + self.interval
 
 
 class RateLimitedImageClient:
-    """Use one shared start limiter for submissions, queries and their retries."""
+    """Apply independent start limits to submit, query, and download requests."""
 
-    def __init__(self, client, interval_seconds: float):
+    def __init__(
+        self,
+        client,
+        submit_interval_seconds: float = 0.0,
+        query_interval_seconds: float = 0.0,
+        download_interval_seconds: float = 0.0,
+    ):
         self.client = client
-        self.limiter = RequestStartLimiter(interval_seconds)
+        self.submit_limiter = RequestStartLimiter(submit_interval_seconds)
+        self.query_limiter = RequestStartLimiter(query_interval_seconds)
+        self.download_limiter = RequestStartLimiter(download_interval_seconds)
 
     def __getattr__(self, name):
         return getattr(self.client, name)
 
     def submit(self, payload):
-        self.limiter.wait()
+        self.submit_limiter.wait()
         return self.client.submit(payload)
 
     def query(self, task_id):
-        self.limiter.wait()
+        self.query_limiter.wait()
         return self.client.query(task_id)
 
     def download(self, url, path, **kwargs):
-        self.limiter.wait()
+        self.download_limiter.wait()
         return self.client.download(url, path, **kwargs)
 
 
@@ -109,7 +116,9 @@ class MxapiGenerateImagesConfig:
     concurrency: int = 1
     poll_interval_seconds: int = 5
     max_wait_seconds: int = 300
-    submit_delay_seconds: float = 1.5
+    submit_delay_seconds: float = 0.5
+    query_delay_seconds: float = 0.5
+    download_delay_seconds: float = 0.5
     download_timeout_seconds: int = 60
     max_permanent_retries: int = 3
     max_download_retries: int = 2
@@ -193,7 +202,9 @@ def load_config(path: str | Path, *, config_data: dict[str, Any] | None = None) 
         columns=data["columns"],
         poll_interval_seconds=int(limits.get("poll_interval_seconds", 5)),
         max_wait_seconds=int(limits.get("max_wait_seconds", 300)),
-        submit_delay_seconds=float(limits.get("submit_delay_seconds", 1.5)),
+        submit_delay_seconds=float(limits.get("submit_delay_seconds", 0.5)),
+        query_delay_seconds=float(limits.get("query_delay_seconds", 0.5)),
+        download_delay_seconds=float(limits.get("download_delay_seconds", 0.5)),
         download_timeout_seconds=int(limits.get("download_timeout_seconds", 60)),
         max_permanent_retries=int(retry.get("max_permanent_retries", 3)),
         max_download_retries=int(retry.get("max_download_retries", 2)),
@@ -314,8 +325,19 @@ def run(config: MxapiGenerateImagesConfig) -> list[ImageGenerationRecord]:
     app_config = load_app_config(config.gateways_path, config.models_path)
     gateway_config = app_config.gateways[config.gateway]
     client = create_image_adapter(config.provider, gateway_config, config.submit_endpoint, config.query_endpoint)
-    client = RateLimitedImageClient(client, config.submit_delay_seconds)
-    print(f"图片API全局请求启动间隔: {config.submit_delay_seconds:g} 秒（提交、查询及重试共享；响应并发等待）", flush=True)
+    client = RateLimitedImageClient(
+        client,
+        submit_interval_seconds=config.submit_delay_seconds,
+        query_interval_seconds=config.query_delay_seconds,
+        download_interval_seconds=config.download_delay_seconds,
+    )
+    print(
+        "图片API线程内请求启动间隔: "
+        f"提交={config.submit_delay_seconds:g} 秒，"
+        f"查询={config.query_delay_seconds:g} 秒，"
+        f"下载={config.download_delay_seconds:g} 秒",
+        flush=True,
+    )
     if config.provider == "tuzi":
         gateway_config.api_key()  # Fail before recording submission intent if credentials are absent.
 

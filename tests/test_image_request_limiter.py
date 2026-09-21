@@ -12,8 +12,8 @@ import pytest
 from unittest.mock import patch
 
 
-def test_submissions_and_queries_share_start_interval():
-    starts = []
+def test_request_intervals_are_independent_per_operation_and_worker_thread():
+    starts = {"submit": [], "query": [], "download": []}
     lock = threading.Lock()
 
     class Client:
@@ -21,22 +21,39 @@ def test_submissions_and_queries_share_start_interval():
 
         def submit(self, payload):
             with lock:
-                starts.append(time.monotonic())
+                starts["submit"].append((payload, time.monotonic()))
             return payload
 
         def query(self, task_id):
-            return self.submit(task_id)
+            with lock:
+                starts["query"].append((task_id, time.monotonic()))
+            return task_id
 
         def download(self, url, path, **kwargs):
-            return self.submit(url)
+            with lock:
+                starts["download"].append((url, time.monotonic()))
+            return url
 
-    client = RateLimitedImageClient(Client(), 0.03)
+    client = RateLimitedImageClient(Client(), 0, 0, 0.03)
     assert client.gateway == "gateway"
-    with ThreadPoolExecutor(max_workers=4) as pool:
-        futures = [pool.submit(client.submit if i % 2 else client.query, i) for i in range(3)]
-        futures.append(pool.submit(client.download, 3, "unused"))
-        assert [f.result() for f in futures] == list(range(4))
-    assert all(b - a >= 0.025 for a, b in zip(starts, starts[1:]))
+    barrier = threading.Barrier(2)
+
+    def download_twice(worker):
+        barrier.wait()
+        client.download((worker, 1), "unused")
+        client.download((worker, 2), "unused")
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        futures = [pool.submit(download_twice, worker) for worker in range(2)]
+        for future in futures:
+            future.result()
+
+    per_worker = {}
+    for (worker, _), started_at in starts["download"]:
+        per_worker.setdefault(worker, []).append(started_at)
+    assert all(times[1] - times[0] >= 0.025 for times in per_worker.values())
+    first_starts = [times[0] for times in per_worker.values()]
+    assert max(first_starts) - min(first_starts) < 0.025
 
 
 def test_download_429_stops_only_current_image_without_retries():
