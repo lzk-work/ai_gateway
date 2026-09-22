@@ -39,6 +39,8 @@ python subtasks/walmart_image_replace/00_replace_workflow.py --batch-name image_
 
 scheduler 配置当前为每 600 秒续跑，全部图集准备完成后停止；Ctrl+C 可在轮间等待时暂停。临时文字失败下一轮重试；成功提示词复用，图片 submitted/pending 查询原 task_id，下载 429 单图延后。输入阻断、明确源数据错误和永久失败保留状态，需人工处理，不会自动清空。
 
+副图提示词以 `../walmart_image_prompt/prompts/walmart_image_prompt_template.txt` 的规则为母版，replace模板只适配动态缺图数量、排除主图及参考图互补。模型结果必须通过完整JSON结构、动态数量、连续编号、设计类型、公共限制和自检字段校验；生成图片入参会把 `global_prompt_restrictions` 拼接到每条差异化提示词。已存在且仍能通过新校验的输出继续复用；旧简化结构会标记无效并重新生成提示词。
+
 主图生成/上传开关保持关闭。Walmart提交/对账入口、Feed客户端及鉴权配置已移除，线上更新只在API项目执行。
 
 ## 限速

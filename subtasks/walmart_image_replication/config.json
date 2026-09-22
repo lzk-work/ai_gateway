@@ -3,7 +3,7 @@
   "image_provider": "tuzi",
   "description": "使用产品主图和对应原副图直接复刻 Walmart 副图，不调用文本模型。",
   "input": {
-    "excel_path": "E:/WorkSpace/ai_gateway/subtasks/walmart_image_replication/input/develop_flow_260921-re.xlsx",
+    "excel_path": "E:/WorkSpace/ai_gateway/subtasks/walmart_image_replication/input/develop_flow_260922-re.xlsx",
     "sheet_name": "Sheet1",
     "columns": {
       "sku": "SKU",

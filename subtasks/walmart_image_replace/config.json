@@ -2,7 +2,7 @@
   "name": "walmart_image_replace",
   "description": "Prepare new image sets using source-SKU directories; no Walmart API calls.",
   "input": {
-    "excel_path": "subtasks/walmart_image_replace/input/image_replace_3-2.xlsx",
+    "excel_path": "subtasks/walmart_image_replace/input/image_replace_4-1-test.xlsx",
     "sheet_name": "Sheet1"
   },
   "execution": {
@@ -14,9 +14,9 @@
   "workflow": {
     "generate_prompts": true,
     "generate_main_image": false,
-    "generate_images": true,
     "upload_main_image": false,
-    "upload_oss": true
+    "generate_images": true,
+    "upload_oss": false
   },
   "image_provider": "tuzi",
   "image_generation": {

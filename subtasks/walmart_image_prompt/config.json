@@ -28,13 +28,13 @@
                               "max_regenerations_per_image":  6
                           },
     "input":  {
-                  "excel_path":  "E:/WorkSpace/ai_gateway/subtasks/walmart_image_prompt/input/develop_flow_260921-ge.xlsx",
+                  "excel_path":  "E:/WorkSpace/ai_gateway/subtasks/walmart_image_prompt/input/develop_flow_260922-ge.xlsx",
                   "sheet_name":  "Sheet1"
               },
     "execution":  {
                       "max_records": 10000,
                       "preflight_model":  true,
-                      "concurrency":  3,
+                      "concurrency":  8,
                       "image_concurrency":  5,
                       "oss_concurrency":  20
                   },

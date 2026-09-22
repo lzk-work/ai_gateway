@@ -76,10 +76,11 @@ image_id 标识计划图片，record_id + image_id 标识商品使用关系。�
 
 ### 提示词与图片任务
 
-- 文本复用共享调用、网关重试、候选模型及并发接口；输出需有准确的 need_sub 条提示词，编号为 1..need_sub，内容非空。
+- 文本复用共享调用、网关重试、候选模型及并发接口。业务模板从 `walmart_image_prompt/prompts/walmart_image_prompt_template.txt` 适配，只调整为动态副图数量、排除主图并要求与参考图互补，保留原产品真实性、视觉体系、Walmart合规和JSON字段结构。
+- 输出必须包含 `product_analysis`、准确的 need_sub 条 `image_plan`、六类允许范围内且互不重复的 `image_type`、完整 `global_prompt_restrictions` 及全部通过的 `final_checklist`。编号必须为 1..need_sub，每条生图提示词不少于基本有效长度并引用公共限制；旧的最小两字段结构不再视为有效。
 - 成功提示词跳过；有效原始输出可恢复，避免恢复过程中重复调用。
 - 临时文字调用失败留到后续轮次重试；明确源数据错误或参考图不可用单独保留失败状态。
-- 图片使用 fixed 模式携带经校验的副图提示词，不依赖历史序号文件名解析。
+- 图片使用 fixed 模式携带经校验的副图提示词；实际提交文本由每张 `ai_image_generation_prompt` 加完整 `global_prompt_restrictions` 组成，不依赖历史序号文件名解析。
 - 整批绑定一个 provider，不进行单图平台降级。TUZI 使用分轮异步路径，其他平台按已有适配器能力运行。
 - 取得 task_id 后立即保存；submitted/pending 复用原任务查询，不额外补提交。
 - 下载 429 单图延后；普通下载故障保留 task_id；明确图片失效按重新生成上限处理。
@@ -176,7 +177,7 @@ API对接说明见 E:/WorkSpace/walmart_api/docs/生图结果Excel对接.md。�
 
 ## 8. 验收状态与未完成范围
 
-最近一次代码验证：2026-09-18，全套离线测试 126 项通过，git diff --check 通过。覆盖动态数量、主图保留、跨目录复用、稳定名称、输入变化、provider 绑定、模拟提交/429/续跑、重复上传、三份报告错误隔离与恢复、追踪字段及旧计划兼容。
+提示词结构及单条模拟报告见 `docs/walmart_image_replace_single_record_simulation_report.md`。
 
 ```powershell
 python -m pytest tests -q -p no:cacheprovider

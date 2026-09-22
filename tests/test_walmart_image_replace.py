@@ -18,6 +18,36 @@ OSS = 'https://test-bucket.oss-cn-beijing.aliyuncs.com/images/walmart'
 REF = 'https://i5.walmartimages.com/asr/reference.jpeg'
 PNG = base64.b64decode('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=')
 
+def prompt_output(count):
+    image_types = ['Hero Feature Image', 'Feature Explanation', 'Lifestyle Scene', 'Product Detail Showcase']
+    items = []
+    for number in range(1, count + 1):
+        items.append({
+            'image_number': number, 'image_type': image_types[number - 1],
+            'visual_purpose': 'Explain a real product benefit',
+            'consumer_purchase_psychology': 'Build confidence', 'usage_environment': None,
+            'composition_plan': 'Balanced ecommerce composition', 'product_placement': 'Centered foreground',
+            'background_design': 'Clean realistic setting', 'photography_style': 'Commercial product photography',
+            'english_selling_text': ['Reliable Everyday Use'], 'visible_detail_callouts': [],
+            'detail_showcase_focus': [], 'real_product_benefits': [], 'trust_elements': [],
+            'design_strategy': 'Show the referenced product accurately',
+            'ai_image_generation_prompt': ('Create a polished square Walmart secondary image using the supplied '
+                f'reference product, preserving every visible detail, with a distinct concept number {number}.'),
+            'product_accuracy_restrictions': ['Use global_prompt_restrictions.product_accuracy_requirement'],
+            'walmart_image_restrictions': ['Use global_prompt_restrictions.walmart_image_requirement'],
+        })
+    restrictions = {field: [f'Valid {field} requirement.'] for field in w.PROMPT_GLOBAL_FIELDS}
+    return {
+        'product_analysis': {'product_type': 'Bottle'}, 'image_plan': items,
+        'global_prompt_restrictions': restrictions,
+        'final_checklist': {
+            'only_strategy_and_prompt': True, 'no_image_generation': True,
+            'requested_image_prompts_created': True, 'main_image_excluded': True,
+            'product_reference_locked': True, 'no_dimension_information': True,
+            'no_unseen_structure': True, 'walmart_compliance_followed': True, 'json_parseable': True,
+        },
+    }
+
 def row(main=True, subs=1, source='SOURCE', result='RESULT', old=0):
     value = {'来源SKU': source, '结果SKU': result, '店铺': 'store', '标题': 'Bottle', '五点': 'Steel\nPortable',
         '参考主图链接': REF, '参考副图链接1': REF.replace('reference','secondary'),
@@ -250,7 +280,7 @@ def test_fixed_workbook_supports_unique_names_and_walmart_references(workspace):
     write([row(False,0)])
     records=w.prepare()
     paths=w.batch_paths()
-    plan={'image_plan':[{'image_number':i,'ai_image_generation_prompt':f'prompt{i}'} for i in range(1,5)]}
+    plan=prompt_output(4)
     w.save_json(paths['full_outputs']/f"{records[0]['record_id']}.json",plan)
     from ai_gateway.subtasks import mxapi_generate_images as engine
     for role in ('sub',):
@@ -306,14 +336,25 @@ def test_upload_error_does_not_become_success():
 @pytest.mark.parametrize('count',[1,2,3,4])
 def test_dynamic_prompt_validation_and_default_six(count):
     from ai_gateway.subtasks.walmart_call_prompt_model import inspect_result_text, build_continue_payload
-    text=json.dumps({'image_plan':[{'image_number':i,'ai_image_generation_prompt':f'concept {i}'} for i in range(1,count+1)]})
+    text=json.dumps(prompt_output(count))
     assert w.validate_prompt(text,count)[1] is None
     assert inspect_result_text(text)[2] is not None
     payload=build_continue_payload({'metadata':{'expected_image_plan_count':count}}, {}, None, 'model', 100, None, 'auto','thinking')
     assert f'{count} 个对象' in payload['messages'][-1]['content']
-    invalid=json.dumps({'image_plan':[{'image_number':1,'ai_image_generation_prompt':'x'}]*count})
+    invalid_data=prompt_output(count)
+    for item in invalid_data['image_plan']:
+        item['image_number']=1
+    invalid=json.dumps(invalid_data)
     if count>1:
         assert w.validate_prompt(invalid,count)[1]
+
+
+def test_replace_prompt_rejects_old_minimal_shape_and_requires_global_rules():
+    minimal = json.dumps({'image_plan': [{'image_number': 1, 'ai_image_generation_prompt': 'short'}]})
+    assert 'product_analysis' in w.validate_prompt(minimal, 1)[1]
+    value = prompt_output(1)
+    del value['global_prompt_restrictions']['walmart_image_requirement']
+    assert 'walmart_image_requirement' in w.validate_prompt(json.dumps(value), 1)[1]
 
 
 def test_generation_project_has_no_platform_update_code():
@@ -349,7 +390,7 @@ def test_actual_shared_text_dynamic_results_and_recovery(workspace,monkeypatch):
     monkeypatch.setattr(loader,'load_app_config',lambda *args:SimpleNamespace(gateways={'tuzi_text':gateway}))
     fake=Mock()
     fake.gateway=gateway
-    text=json.dumps({'image_plan':[{'image_number':i,'ai_image_generation_prompt':f'prompt {i}'} for i in (1,2)]})
+    text=json.dumps(prompt_output(2))
     fake.responses_completions.return_value=({'id':'request','output_text':text},1)
     monkeypatch.setattr(openai_chat_client,'OpenAIChatClient',lambda gateway:fake)
     w.prompt_stage(records,paths)
@@ -358,7 +399,17 @@ def test_actual_shared_text_dynamic_results_and_recovery(workspace,monkeypatch):
     assert saved['validation_status']=='passed'
     assert saved['image_plan_count']==2
     content=fake.responses_completions.call_args.args[0]['input'][0]['content']
+    text_prompt=next(i['text'] for i in content if i['type']=='input_text')
+    assert '主图不参与本次生成' in text_prompt
+    assert '本次需要生成的副图数量：2' in text_prompt
+    assert 'image_plan必须固定输出2个对象' in text_prompt
     assert all('walmartimages.com' in i['image_url'] for i in content if i['type']=='input_image')
+    w.build_image_input(records,paths,'sub')
+    sheet=load_workbook(paths['sub_input'],data_only=True).active
+    headers=[cell.value for cell in sheet[1]]
+    generated_prompt=sheet.cell(2,headers.index('生成提示词')+1).value
+    assert 'Global Prompt Restrictions:' in generated_prompt
+    assert 'walmart_image_requirement' in generated_prompt
     canonical=paths['full_outputs']/f"{records[0]['record_id']}.json"
     canonical.unlink()  # Simulate interruption after raw model output, before canonical checkpoint.
     paths['model_results'].unlink()
@@ -372,7 +423,7 @@ def test_shared_image_engine_submit_query_429_resume_without_new_tasks(workspace
     write([row(subs=3)])
     records=w.prepare()
     paths=w.batch_paths()
-    w.save_json(paths['full_outputs']/f"{records[0]['record_id']}.json",{'image_plan':[{'image_number':1,'ai_image_generation_prompt':'scene'}]})
+    w.save_json(paths['full_outputs']/f"{records[0]['record_id']}.json",prompt_output(1))
     from ai_gateway.subtasks import mxapi_generate_images as engine
     from ai_gateway.clients.image_providers import TuziImageAdapter
     from ai_gateway.config.loader import GatewayConfig
@@ -422,7 +473,7 @@ def test_remote_uploaded_image_not_regenerated_when_local_file_lost(workspace):
     write([row(subs=3)])
     records=w.prepare()
     paths=w.batch_paths()
-    w.save_json(paths['full_outputs']/f"{records[0]['record_id']}.json",{'image_plan':[{'image_number':1,'ai_image_generation_prompt':'scene'}]})
+    w.save_json(paths['full_outputs']/f"{records[0]['record_id']}.json",prompt_output(1))
     w.save_jsonl(paths['sub_oss_checkpoint'],upload_rows(records[0]))
     assert w.input_rows(records,paths,'sub')==[]
     assert w.build_results(records,paths)[0][0]['complete']
@@ -531,7 +582,7 @@ def test_recovered_prompt_and_completed_uploads_hide_stale_failure(workspace):
     reason = 'HTTP 429: exceeded rate limit'
     w.save_jsonl(paths['model_results'], [{'sku': records[0]['record_id'], 'status': 'failed', 'error_message': reason}])
     output = paths['full_outputs'] / f"{records[0]['record_id']}.json"
-    w.save_json(output, {'image_plan': [{'image_number': i, 'ai_image_generation_prompt': f'concept{i}'} for i in range(1, 4)]})
+    w.save_json(output, prompt_output(3))
     assert f'generate_prompts: {reason}' not in w.build_results(records, paths)[0][0]['errors']
     output.unlink()
     w.save_jsonl(paths['sub_oss_checkpoint'], upload_rows(records[0]))

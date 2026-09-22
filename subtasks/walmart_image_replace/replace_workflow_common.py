@@ -21,6 +21,25 @@ sys.path.insert(0, str(PROJECT_ROOT / 'src'))
 BATCHES_ROOT = TASK_ROOT / 'batches'
 TASK_CONFIG = TASK_ROOT / 'config.json'
 SCHEMA_VERSION = 3
+PROMPT_IMAGE_TYPES = {
+    'Hero Feature Image', 'Feature Explanation', 'Lifestyle Scene',
+    'Product Detail Showcase', 'Why Choose Us', 'Package & Detail / Trust Image',
+}
+PROMPT_ITEM_FIELDS = {
+    'image_number': int, 'image_type': str, 'visual_purpose': str,
+    'consumer_purchase_psychology': str, 'composition_plan': str,
+    'product_placement': str, 'background_design': str,
+    'photography_style': str, 'english_selling_text': list,
+    'visible_detail_callouts': list, 'detail_showcase_focus': list,
+    'real_product_benefits': list, 'trust_elements': list,
+    'design_strategy': str, 'ai_image_generation_prompt': str,
+    'product_accuracy_restrictions': list, 'walmart_image_restrictions': list,
+}
+PROMPT_GLOBAL_FIELDS = {
+    'strict_dimension_restriction', 'product_accuracy_requirement',
+    'additional_product_structure_restriction', 'additional_dimension_restriction',
+    'walmart_image_requirement', 'text_compliance_requirement',
+}
 
 def read_json(path):
     return json.loads(Path(path).read_text(encoding='utf-8-sig'))
@@ -280,6 +299,9 @@ def validate_prompt(text, count):
     if error:
         return None, error
     parsed, _ = extract_json(text)
+    analysis = parsed.get('product_analysis')
+    if not isinstance(analysis, dict):
+        return None, '缺少product_analysis对象'
     plan = parsed['image_plan']
     if any(not isinstance(i, dict) for i in plan):
         return None, '提示词计划项不是对象'
@@ -287,7 +309,38 @@ def validate_prompt(text, count):
         return None, '提示词编号必须按计划为1..need_sub'
     if any(not isinstance(i.get('ai_image_generation_prompt'), str) or not i['ai_image_generation_prompt'].strip() for i in plan):
         return None, '生成提示词缺失'
+    for index, item in enumerate(plan, 1):
+        for field, field_type in PROMPT_ITEM_FIELDS.items():
+            if field not in item or not isinstance(item[field], field_type):
+                return None, f'image_plan[{index}].{field}缺失或类型错误'
+        if item['image_type'] not in PROMPT_IMAGE_TYPES:
+            return None, f'image_plan[{index}].image_type不在允许范围'
+        if len(item['ai_image_generation_prompt'].strip()) < 80:
+            return None, f'image_plan[{index}].ai_image_generation_prompt内容过短'
+        if not item['product_accuracy_restrictions'] or not item['walmart_image_restrictions']:
+            return None, f'image_plan[{index}]未引用公共限制'
+    if len({item['image_type'] for item in plan}) != len(plan):
+        return None, '图片设计类型重复'
+    restrictions = parsed.get('global_prompt_restrictions')
+    if not isinstance(restrictions, dict):
+        return None, '缺少global_prompt_restrictions对象'
+    for field in PROMPT_GLOBAL_FIELDS:
+        values = restrictions.get(field)
+        if not isinstance(values, list) or not values or any(not isinstance(value, str) or not value.strip() for value in values):
+            return None, f'global_prompt_restrictions.{field}缺失或无效'
+    checklist = parsed.get('final_checklist')
+    if not isinstance(checklist, dict) or any(checklist.get(field) is not True for field in (
+        'only_strategy_and_prompt', 'no_image_generation', 'requested_image_prompts_created',
+        'main_image_excluded', 'product_reference_locked', 'no_dimension_information',
+        'no_unseen_structure', 'walmart_compliance_followed', 'json_parseable')):
+        return None, 'final_checklist缺失或未全部通过'
     return parsed, None
+
+def generation_prompt(item, global_restrictions):
+    """Build the exact prompt submitted to the image model."""
+    prompt = item['ai_image_generation_prompt'].strip()
+    global_text = json.dumps(global_restrictions, ensure_ascii=False)
+    return f'{prompt}\n\nGlobal Prompt Restrictions:\n{global_text}'
 
 def uploaded_generated_url(saved, oss_directory, image_name):
     """Accept current JPEG objects and historical PNG objects for one planned image."""
@@ -381,7 +434,7 @@ def input_rows(records, paths, role):
             parsed, error = validate_prompt(output.read_text(encoding='utf-8-sig'), r['need_sub'])
             if error:
                 continue
-            prompts = {p['image_number']: p['ai_image_generation_prompt'] for p in parsed['image_plan']}
+            prompts = {p['image_number']: generation_prompt(p, parsed['global_prompt_restrictions']) for p in parsed['image_plan']}
         for t in r['tasks']:
             if t['role'] == role:
                 saved = uploaded.get((r['record_id'], t['image_name']))
