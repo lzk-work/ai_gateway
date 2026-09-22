@@ -168,6 +168,25 @@ def test_jpeg_uploads_are_used_in_final_image_set(workspace):
     assert payloads[0]['complete']
 
 
+def test_successful_upload_is_generation_success_when_checkpoint_status_is_stale(workspace):
+    _, write = workspace
+    write([row(False, 1)])
+    records = w.prepare()
+    paths = w.batch_paths()
+    stale = [{'sku': records[0]['record_id'], 'image_name': task['image_name'],
+              'status': 'submitted', 'task_id': f'task-{index}'}
+             for index, task in enumerate(records[0]['tasks'])]
+    w.save_jsonl(paths['sub_checkpoint'], stale)
+    w.save_jsonl(paths['sub_oss_checkpoint'], upload_rows(records[0], extension='jpg'))
+    payloads, manifests = w.build_results(records, paths)
+    generated = [item for item in manifests if item['origin'] == 'generated']
+    assert payloads[0]['complete']
+    assert all(item['generation_status'] == 'success' for item in generated)
+    w.write_reports(payloads, manifests, paths)
+    report = w.load_jsonl(paths['latest_used_urls'])[0]
+    assert report['generated_count'] == report['uploaded_count'] == len(records[0]['tasks'])
+
+
 def test_complete_three_outputs_and_resume_cumulative(workspace):
     _, write = workspace
     write([row(subs=1,old=5)])

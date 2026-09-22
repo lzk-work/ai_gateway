@@ -535,10 +535,11 @@ def build_results(records, paths):
             up = uploaded.get((r['record_id'], t['image_name']))
             state = states.get((r['record_id'], t['image_name']), {})
             url = uploaded_generated_url(up, r['oss_directory'], t['image_name'])
+            generation_status = 'success' if url else state.get('status', 'not_submitted')
             expected = up['oss_key'] if url else f"{r['oss_directory']['prefix']}/{t['image_name']}.jpg"
             image = {**t, 'record_id': r['record_id'], 'source_sku': r['source_sku'], 'result_sku': r['result_sku'], 'store': r['store'],
                 'origin': 'generated', 'kind': 'new', 'url': url, 'oss_key': expected, 'actual_directory': r['oss_directory']['prefix'],
-                'usage_status': 'prepared' if url else 'not_ready', 'generation_status': state.get('status', 'not_submitted'),
+                'usage_status': 'prepared' if url else 'not_ready', 'generation_status': generation_status,
                 'upload_status': (up or {}).get('status', 'not_uploaded'), 'task_id': state.get('task_id'),
                 'provider': state.get('provider'), 'attempt': state.get('attempts'),
                 'input_column': None, 'input_order': None, 'plan_created_at': t.get('plan_created_at'),

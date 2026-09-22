@@ -524,6 +524,11 @@ def update_generation_local_path(config: OssUploadConfig, row: dict[str, Any], l
         if not saved:
             return
         updated = dict(saved)
+        # A validated local image has already been accepted by OSS at this
+        # point.  Preserve that terminal fact even when the process-wide cache
+        # was populated in an earlier scheduler cycle while the task was only
+        # submitted/pending.
+        updated["status"] = "success"
         updated["downloaded_path"] = str(local_path)
         updated["file_size"] = local_path.stat().st_size
         append_jsonl_row(checkpoint_path, updated)
@@ -578,7 +583,7 @@ def sync_generation_results(config: OssUploadConfig) -> None:
                 current = checkpoint_rows.get(record_key(saved))
                 if not current or not current.get("downloaded_path"):
                     continue
-                for field in ("downloaded_path", "file_size"):
+                for field in ("status", "downloaded_path", "file_size"):
                     if saved.get(field) != current.get(field):
                         saved[field] = current.get(field)
                         changed = True

@@ -130,6 +130,40 @@ class CompressionTests(unittest.TestCase):
             self.assertTrue(saved["downloaded_path"].endswith("image.jpg"))
             self.assertTrue(Path(saved["downloaded_path"]).is_file())
 
+    def test_successful_upload_repairs_stale_cross_cycle_generation_status(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "image.png"
+            Image.new("RGB", (40, 40), "white").save(source)
+            generation = root / "image_generation_results.jsonl"
+            checkpoint = root / "image_generation_checkpoint.jsonl"
+            stale = {
+                "row_number": 2, "sku": "sku", "image_name": "image",
+                "status": "submitted", "task_id": "task-paid",
+                "downloaded_path": None, "file_size": None,
+            }
+            import json
+            generation.write_text(json.dumps(stale) + "\n", encoding="utf-8")
+            checkpoint.write_text(json.dumps(stale) + "\n", encoding="utf-8")
+            cfg = config(root)
+            cfg.image_results_path = str(generation)
+            row = {"row_number": 2, "sku": "sku", "image_name": "image",
+                   "local_path": str(root / "image.jpg"), "source_path": str(source),
+                   "oss_key": "develop/sku/image.jpg"}
+
+            class Client:
+                def upload_file(self, local_path, key, overwrite=True):
+                    return {"success": True, "size": Path(local_path).stat().st_size}
+                def public_url(self, key):
+                    return "https://example/" + key
+
+            process_rows([row], cfg, Client(), CheckpointStore(root / "oss.jsonl"))
+            latest = json.loads(checkpoint.read_text(encoding="utf-8").splitlines()[-1])
+            summary = json.loads(generation.read_text(encoding="utf-8").splitlines()[0])
+            self.assertEqual(latest["status"], "success")
+            self.assertEqual(summary["status"], "success")
+            self.assertEqual(latest["task_id"], "task-paid")
+
 
 if __name__ == "__main__":
     unittest.main()
