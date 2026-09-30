@@ -40,7 +40,20 @@ Remove copyright-risk graphic elements such as:
 - flamingo cartoon elements
 - unauthorized character images
 
-If people appear in the original image, replace them with different-looking models to avoid copyright issues.
+Human Model Replacement Requirement — highest priority whenever any person, face, hand, body part, silhouette, or identifiable human appearance is visible anywhere in the reference image, regardless of whether the person is wearing, holding, using, presenting, standing near, or merely appearing in the background with the product:
+- Never reproduce, preserve, imitate, or closely resemble the person shown in the reference image.
+- Replace the reference person with a clearly different fictional model who cannot be recognized as the same individual.
+- Keep the replacement model appropriate for the product's intended customer, usage scenario, and original audience. Preserve a reasonably similar demographic profile when it matters to the product, such as age range, gender presentation, activity type, and lifestyle context. Do not replace a young-adult product user with an elderly model, a child, or another clearly unsuitable user group merely to create difference.
+- Change enough identity-defining features to establish a clearly different person. Select an appropriate combination such as facial structure, eyes, eyebrows, nose, lips, jawline, hairstyle, hair color, makeup, expression, head angle, or viewing direction. It is not necessary or desirable to change every listed attribute.
+- Clothing, body pose, hand pose, framing, and scene arrangement may remain functionally similar when required to demonstrate the product correctly, but the overall portrait must not preserve the same recognizable likeness.
+- Do not perform a superficial face swap that leaves the overall person recognizably the same.
+- Do not preserve distinctive facial features, hairstyle, makeup, skin details, body characteristics, tattoos, or other identifying traits from the reference person.
+- When only hands or part of a body are visible, use visibly different hands, skin details, pose, clothing, and body presentation.
+- The replacement model must be newly generated and must not resemble a real celebrity, public figure, or recognizable person.
+- Preserve only the product's identity, the product's necessary functional relationship to the scene, and the image's high-level commercial purpose. This rule applies to every human-related image, not only products that are worn or held. Human identity, appearance, pose, styling, placement, and interaction must be substantially different.
+- You may adjust model position, framing, body orientation, gesture, activity, or scene arrangement when useful, but changes must remain natural for the product, intended customer, and original usage scenario. Do not introduce large demographic or contextual differences solely for the purpose of making the person different.
+- This human replacement requirement overrides instructions to follow the second image's pose, composition, camera angle, or scene whenever following them would make the person look substantially similar.
+- Before finalizing, verify that an ordinary viewer would immediately recognize the generated model as a different person. If not, redesign the model and pose again.
 
 Recreate the second image's visual concept faithfully, but do not make a pixel-for-pixel copy. Make only the changes needed to remove brands, copyrighted elements, or identifiable people and to produce a clean, newly rendered commercial image.
 

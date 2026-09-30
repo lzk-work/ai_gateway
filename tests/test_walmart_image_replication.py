@@ -82,6 +82,27 @@ class ReplicationWorkflowTests(unittest.TestCase):
         source = (TASK / "01_build_replication_tasks.py").read_text(encoding="utf-8")
         self.assertNotIn('TASK_ROOT.parent / "walmart_image_prompt"', source)
 
+    def test_sub_prompt_requires_substantially_different_human_model(self):
+        prompt = (TASK / "prompts/walmart_image_replication_prompt.txt").read_text(encoding="utf-8")
+        self.assertIn("Human Model Replacement Requirement", prompt)
+        self.assertIn("cannot be recognized as the same individual", prompt)
+        self.assertIn("not only products that are worn or held", prompt)
+        self.assertIn("appropriate for the product's intended customer", prompt)
+        self.assertIn("It is not necessary or desirable to change every listed attribute", prompt)
+        self.assertIn("Do not introduce large demographic or contextual differences", prompt)
+        self.assertIn("overrides instructions to follow the second image's pose", prompt)
+        self.assertIn("ordinary viewer would immediately recognize", prompt)
+
+    def test_main_prompt_removes_or_replaces_every_human_depiction(self):
+        prompt = (TASK / "prompts/main_image_optimization_prompt.txt").read_text(encoding="utf-8")
+        self.assertIn("人物形象替换要求（最高优先级）", prompt)
+        self.assertIn("不限于佩戴、手持或使用产品的场景", prompt)
+        self.assertIn("最终主图原则上不得出现人物", prompt)
+        self.assertIn("不得为了制造差异而换成老人、儿童", prompt)
+        self.assertIn("不要求也不应机械地同时改变全部特征", prompt)
+        self.assertIn("普通观察者应当能够立即判断", prompt)
+        self.assertIn("Human Model Replacement Requirement", prompt)
+
     def test_builds_one_task_per_existing_sub_image_with_two_references(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

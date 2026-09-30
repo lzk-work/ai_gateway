@@ -95,6 +95,26 @@
 
 ---
 
+## 人物形象处理要求（最高优先级）
+
+本规则适用于参考图片中出现的任何人物、脸部、手模、局部身体、人物轮廓或背景人物，不限于佩戴、手持或使用产品的场景。
+
+* 最终主图原则上不得出现人物、手模或局部身体，应在保持产品完整真实的前提下移除人物。
+* 如果产品必须依赖人体才能准确展示其形态、结构或使用关系，才允许保留人物展示；此时必须替换为无法被识别为同一人的全新虚构模特。
+* 替换模特必须符合产品适用人群和原使用场景。产品面向年轻女性时，应继续使用年龄段和气质合适的年轻女性模特；不得为了制造差异而换成老人、儿童或其他明显不适用的人群。
+* 应根据图片实际情况改变足够的身份识别特征，例如脸型、部分五官、发型、发色、妆容、表情、头部角度或视线方向，使人物明确不是同一个人；不要求机械地同时改变全部特征。
+* 服装、身体姿势、手势、取景和场景在产品展示需要时可以保持功能上的相似，但整体人物肖像不得保留可识别的相同外貌。
+* 禁止仅进行表面换脸，导致整体人物仍可被识别为参考图中的同一个人。
+* 只有手部或局部身体可见时，也必须使用明显不同的手部、皮肤细节和姿态。
+* 新人物不得模仿名人、公众人物或其他可识别人物。
+* 只保留产品真实性、产品与人体或场景之间必要的功能关系，以及图片的高层商业目的。
+* 人物处理要求优先于复刻参考人物的姿势、拍摄角度、构图和场景关系。
+* 输出前必须检查：普通观察者应当能够立即判断新人物与参考人物不是同一个人，同时仍属于适合该产品的目标用户。
+
+Human Model Requirement: Remove people, faces, hands, and body parts from the final main image whenever the product can be shown accurately without them. If a human is essential to accurate product presentation, use a clearly different fictional model while preserving an appropriate customer profile, age range, gender presentation, activity, and usage context. Change enough identity-defining features to establish a different person, but do not mechanically change every attribute or introduce an unsuitable demographic. An ordinary viewer must immediately recognize the generated person as a different individual within the same appropriate user scenario.
+
+---
+
 ## 允许优化内容
 
 ### 产品摆放方式

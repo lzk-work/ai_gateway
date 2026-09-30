@@ -33,6 +33,9 @@
 【文案合规要求】
 图片文字必须简短、真实、通用表达、基于产品特点。禁止品牌词、商标词、竞品名称、Official、Genuine、Certified、Original、Best、No.1、Guaranteed。推荐使用Durable、Premium、Convenient、Easy、Reliable、Compact Design、Everyday Use。
 
+【人物形象处理要求，最高优先级】
+本规则适用于参考图片及拟生成方案中出现的任何人物、脸部、手模、局部身体、人物轮廓或背景人物，不限于佩戴、手持或使用产品的场景。产品能够在不出现人物的情况下准确表达时，可以不使用人物。必须使用人物时，生成方案和AI Prompt必须要求使用无法被识别为参考图同一人的全新虚构模特，同时保持产品适用的目标人群、年龄段、性别呈现、活动方式和使用场景。不得为了制造差异，把年轻用户产品改成老人或儿童等明显不适用人群。应根据实际图片改变足够的身份识别特征，例如脸型、部分五官、发型、发色、妆容、表情、头部角度或视线方向；不要求机械地同时改变全部特征。服装、姿势、手势、取景和场景在产品展示需要时可以保持功能上的相似，但整体人物肖像不得仍可识别为同一个人。禁止表面换脸、模仿名人或公众人物。只有手部或局部身体时，也必须使用明显不同的手部、皮肤细节和姿态。人物替换不得改变产品真实性、正确使用关系和图片的商业目的。
+
 【Walmart Listing副图候选设计类型】
 以下六类设计沿用原Walmart图片提示词的视觉体系。本次只生成{{数量}}张副图。必须结合产品特点和参考副图已有内容，从以下类型中选择最适合且互不重复的{{数量}}类；优先补充参考副图尚未清楚表达的购买理由和视觉内容。不要为了凑数量重复同一场景、同一卖点或同一构图。输出的image_number必须重新连续编号为1到{{数量}}。
 
@@ -90,6 +93,14 @@ Ensure the image follows Walmart listing image standards.
 Text Compliance Requirement:
 Any text in the image must avoid trademarked words, brand names, competitor names, copyrighted terms, and unauthorized claims.
 Use only generic product benefit descriptions based on real product features.
+Human Model Requirement:
+If any person, face, hand, body part, silhouette, or background person appears, do not reproduce or closely resemble the reference person.
+Use a clearly different fictional model while keeping the model appropriate for the product's intended customer, age range, gender presentation, activity, and usage context.
+Change enough identity-defining features to establish a different person, but do not mechanically change every attribute or introduce an unsuitable demographic.
+Clothing, pose, framing, and scene may remain functionally similar when necessary for accurate product presentation, provided the overall portrait is not recognizably the same.
+Do not perform a superficial face swap and do not imitate a celebrity, public figure, or recognizable person.
+When only hands or body parts are visible, use visibly different anatomy details, skin details, and pose.
+An ordinary viewer must immediately recognize the generated person as a different individual within the same appropriate user scenario.
 
 【最终任务要求】
 本任务只用于分析产品卖点、创建Walmart Listing副图策略、创建{{数量}}张AI图片生成提示词。不要直接生成图片，不要输出主图方案，不要输出最终图片，不要创建视觉产品。只提供Professional Walmart Listing Product Image Design Strategy + AI Generation Prompt。
@@ -104,7 +115,7 @@ Use only generic product benefit descriptions based on real product features.
 4. ai_image_generation_prompt只输出该图片的差异化生成内容，不要重复最终统一限制词，不要重复Product Accuracy Requirement，不要重复Strict Dimension Restriction，不要重复Walmart Image Requirement。
 5. 每个ai_image_generation_prompt控制在1000英文字符以内。
 6. product_accuracy_restrictions字段不要重复完整限制词，只输出：["Use global_prompt_restrictions.product_accuracy_requirement", "Use global_prompt_restrictions.additional_product_structure_restriction"]。
-7. walmart_image_restrictions字段不要重复完整限制词，只输出：["Use global_prompt_restrictions.walmart_image_requirement", "Use global_prompt_restrictions.text_compliance_requirement", "Use global_prompt_restrictions.strict_dimension_restriction"]。
+7. walmart_image_restrictions字段不要重复完整限制词，只输出：["Use global_prompt_restrictions.walmart_image_requirement", "Use global_prompt_restrictions.text_compliance_requirement", "Use global_prompt_restrictions.strict_dimension_restriction"]。人物相关方案必须在ai_image_generation_prompt中明确遵守人物形象处理要求。
 8. global_prompt_restrictions保留一次完整公共限制词，供系统在生成图片时与每张ai_image_generation_prompt拼接使用。
 
 【JSON输出格式】
@@ -166,7 +177,7 @@ Use only generic product benefit descriptions based on real product features.
     "additional_product_structure_restriction": ["Do not add any product structures that are not visible in the reference images.", "Do not create internal parts, hidden components, back side structures, bottom structures, opened states, exploded views, or AI-invented details."],
     "additional_dimension_restriction": ["Do not add any dimensions, measurements, capacity, weight information, specifications, or parameter labels.", "Do not estimate product size from the images.", "Even if product information contains dimensions, do not display any size information."],
     "walmart_image_requirement": ["Create a 1:1 square ecommerce image.", "Use high resolution commercial product photography style.", "Minimum recommended resolution: 2000x2000 pixels.", "Ensure the image follows Walmart listing image standards."],
-    "text_compliance_requirement": ["Any text in the image must avoid trademarked words, brand names, competitor names, copyrighted terms, and unauthorized claims.", "Use only generic product benefit descriptions based on real product features."]
+    "text_compliance_requirement": ["Any text in the image must avoid trademarked words, brand names, competitor names, copyrighted terms, and unauthorized claims.", "Use only generic product benefit descriptions based on real product features.", "If a person appears, use a clearly different fictional model who cannot be recognized as the reference person.", "Keep the replacement model appropriate for the product's intended customer, age range, gender presentation, activity, and usage context.", "Change enough identity-defining features to establish a different person, but do not mechanically change every attribute or introduce an unsuitable demographic.", "Do not perform a superficial face swap or imitate a celebrity, public figure, or recognizable person.", "When only hands or body parts appear, use visibly different anatomy details, skin details, and pose."]
   },
   "final_checklist": {
     "only_strategy_and_prompt": true,

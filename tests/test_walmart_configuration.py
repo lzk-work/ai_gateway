@@ -21,6 +21,37 @@ from ai_gateway.subtasks import walmart_get_pic_prompt as prompts
 
 
 class ConfigurationTests(unittest.TestCase):
+    def test_image_prompt_templates_require_a_different_but_appropriate_person(self):
+        sub_prompt = (TASK / "prompts/walmart_image_prompt_template.txt").read_text(encoding="utf-8")
+        main_prompt = (TASK / "prompts/main_image_optimization_prompt.txt").read_text(encoding="utf-8")
+        for prompt in (sub_prompt, main_prompt):
+            self.assertIn("Human Model Requirement", prompt)
+            self.assertIn("clearly different fictional model", prompt)
+            self.assertIn("do not mechanically change every attribute", prompt)
+            self.assertIn("appropriate", prompt)
+        self.assertIn("ai_image_generation_prompt", sub_prompt)
+
+    def test_image_prompt_global_human_rule_reaches_the_image_model_prompt(self):
+        human_rule = (
+            "Use a clearly different fictional model while keeping the model appropriate "
+            "for the product's intended customer."
+        )
+        payload = {
+            "image_plan": [{"image_number": 1, "ai_image_generation_prompt": "Create a lifestyle image."}],
+            "global_prompt_restrictions": {"text_compliance_requirement": [human_rule]},
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            full_output = root / "sku.json"
+            full_output.write_text(json.dumps(payload), encoding="utf-8")
+            model_results = root / "model_results.jsonl"
+            model_results.write_text(
+                json.dumps({"sku": "sku", "full_output_path": str(full_output)}) + "\n",
+                encoding="utf-8",
+            )
+            image_prompt = images.load_prompt_map(model_results)["sku"][1]
+        self.assertIn(human_rule, image_prompt)
+
     def test_shared_gateway_retry_contract(self):
         from ai_gateway.config.loader import GatewayConfig
         from ai_gateway.retry_policy import gateway_max_attempts
