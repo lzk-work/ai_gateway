@@ -155,7 +155,7 @@ def export(batch_name=None, output=None, *, offline=False, thumbnail_size=240,
         sheet.title = '人工审核预览'
         for start, end, label, color in (
             (1, info_count, '产品及文案信息 / 人工审核', 'FFF2CC'),
-            (ref_start, final_start - 1, '参考图（沃尔玛平台素材）', REFERENCE_COLOR),
+            (ref_start, final_start - 1, '参考图（输入素材）', REFERENCE_COLOR),
             (final_start, total_columns, '最新使用图（原主图＋最终副图）', FINAL_COLOR)):
             sheet.merge_cells(start_row=1, start_column=start, end_row=1, end_column=end)
             set_cell(sheet, 1, start, label).font = Font(bold=True, size=13)
@@ -226,7 +226,7 @@ def export(batch_name=None, output=None, *, offline=False, thumbnail_size=240,
         sheet.page_setup.fitToHeight = 0
         guide = book.create_sheet('审核说明')
         instructions = [
-            '蓝色区域是输入的沃尔玛参考图；绿色区域是最新使用图，两组主副图顺序分别标注。',
+            '蓝色区域是输入的参考图；绿色区域是最新使用图，两组主副图顺序分别标注。',
             '每个商品占两行：缩略图在上、原图链接在下；最新使用主图原样保留。',
             '对照来源SKU、结果SKU、店铺和文案，逐项检查商品身份、颜色、形状及副图表达是否正确。',
             '仅成功上传的新图进入最新使用图；未完成商品仍保留，并显示完整状态和错误。',

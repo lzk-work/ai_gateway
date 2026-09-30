@@ -94,6 +94,38 @@ def test_dynamic_counts_and_history_reuse(workspace, main, subs, expected):
     assert all('RESULT' not in t['image_name'] for t in r['tasks'])
 
 
+def test_configurable_minimum_new_sub_images_controls_plan_and_completion(workspace):
+    cfg, write = workspace
+    cfg['image_selection'] = {'minimum_new_sub_images': 5}
+    write([row(main=True, subs=2)])
+    records = w.prepare()
+    paths = w.batch_paths()
+    assert records[0]['minimum_new_sub_images'] == 5
+    assert records[0]['need_sub'] == 3
+    w.save_jsonl(paths['sub_oss_checkpoint'], upload_rows(records[0]))
+    payloads, _ = w.build_results(records, paths)
+    assert payloads[0]['complete']
+    assert len(payloads[0]['secondary_urls']) == 5
+
+
+@pytest.mark.parametrize('value',[0,7,True,'invalid'])
+def test_minimum_new_sub_images_rejects_invalid_values(workspace, value):
+    cfg, write = workspace
+    cfg['image_selection'] = {'minimum_new_sub_images': value}
+    write([row()])
+    with pytest.raises(ValueError, match='1到6'):
+        w.prepare()
+
+
+def test_existing_batch_rejects_target_count_change(workspace):
+    cfg, write = workspace
+    write([row()])
+    w.prepare()
+    cfg['image_selection'] = {'minimum_new_sub_images': 5}
+    with pytest.raises(ValueError, match='图片目标数量变化'):
+        w.prepare()
+
+
 def test_source_directory_when_all_urls_use_other_history_skus(workspace):
     _, write = workspace
     r = row(False,2)
@@ -161,14 +193,12 @@ def test_url_object_dedup_and_column_numeric_order(workspace):
     assert urls[1].endswith('new_sub3_SOURCE.png')
     assert urls[2].endswith('new_sub10_SOURCE.png')
 
-@pytest.mark.parametrize('alter', ['missing_oss','reference_oss','role_conflict','different_base'])
+@pytest.mark.parametrize('alter', ['missing_oss','role_conflict','different_base'])
 def test_bad_inputs_block_without_generation(workspace, alter):
     _, write = workspace
     r = row()
     if alter == 'missing_oss':
         r['已有主图链接']=r['已有副图链接1']=''
-    elif alter == 'reference_oss':
-        r['参考主图链接']=r['已有主图链接']
     elif alter == 'role_conflict':
         r['已有副图链接1']=r['已有主图链接']
     else:
@@ -176,6 +206,33 @@ def test_bad_inputs_block_without_generation(workspace, alter):
     write([r])
     planned = w.prepare()[0]
     assert planned['errors'] and not planned['tasks']
+
+
+def test_oss_reference_images_are_allowed(workspace):
+    _, write = workspace
+    r = row()
+    r['参考主图链接'] = r['已有主图链接']
+    r['参考副图链接1'] = r['已有副图链接1']
+    write([r])
+    planned = w.prepare()[0]
+    assert not planned['errors']
+    assert planned['tasks']
+
+
+def test_existing_batch_refreshes_obsolete_validation_error(workspace):
+    _, write = workspace
+    write([row()])
+    planned = w.prepare()
+    planned[0]['errors'] = ['参考图必须是沃尔玛平台URL']
+    planned[0]['tasks'] = []
+    paths = w.batch_paths()
+    w.save_jsonl(paths['plan'], planned)
+    w.save_jsonl(paths['inventory'], planned)
+
+    resumed = w.prepare()
+
+    assert not resumed[0]['errors']
+    assert resumed[0]['tasks']
 
 
 def upload_rows(record, count=None, extension='png'):
@@ -236,6 +293,9 @@ def test_complete_three_outputs_and_resume_cumulative(workspace):
     new = w.load_jsonl(paths['new_generated_urls'])[0]
     archive = w.load_jsonl(paths['archive_candidate_urls'])[0]
     assert latest['complete'] and len(latest['secondary_urls'])==4
+    generated_urls = [item['oss_url'] for item in upload_rows(records[0])]
+    assert latest['secondary_urls'][:3] == generated_urls
+    assert latest['secondary_urls'][3] == f'{OSS}/SOURCE/new_sub1_SOURCE.png'
     assert new['main_image_url'] is None and len(new['secondary_urls'])==3
     assert len(archive['secondary_urls'])==5 and archive['archive_status']=='candidate_only'
     assert 'platform_update_status' not in latest
@@ -357,6 +417,20 @@ def test_replace_prompt_rejects_old_minimal_shape_and_requires_global_rules():
     assert 'walmart_image_requirement' in w.validate_prompt(json.dumps(value), 1)[1]
 
 
+def test_replace_prompt_requires_a_different_but_appropriate_person_and_reaches_image_request():
+    template = (ROOT / 'subtasks/walmart_image_replace/prompts/walmart_image_replace_template.txt').read_text(encoding='utf-8')
+    assert 'Human Model Requirement' in template
+    assert 'clearly different fictional model' in template
+    assert 'do not mechanically change every attribute' in template
+    assert 'unsuitable demographic' in template
+    human_rule = "Use a clearly different fictional model while keeping the model appropriate for the product's intended customer."
+    prompt = w.generation_prompt(
+        {'ai_image_generation_prompt': 'Create a lifestyle image with the product.'},
+        {'text_compliance_requirement': [human_rule]},
+    )
+    assert human_rule in prompt
+
+
 def test_generation_project_has_no_platform_update_code():
     task = ROOT / 'subtasks/walmart_image_replace'
     for name in ('06_replace_submit.py', '07_replace_reconcile.py', 'scripts/walmart_feed.py'):
@@ -364,6 +438,27 @@ def test_generation_project_has_no_platform_update_code():
     cfg = json.loads((task / 'config.json').read_text(encoding='utf-8-sig'))
     assert 'walmart_api' not in cfg
     assert 'submit_replace' not in cfg['workflow'] and 'reconcile' not in cfg['workflow']
+
+
+def test_execution_summary_prints_effective_parameters(workspace, capsys):
+    cfg, write = workspace
+    cfg.update({
+        'image_provider': 'tuzi',
+        'image_selection': {'minimum_new_sub_images': 5},
+        'execution': {'max_records': 12, 'concurrency': 8, 'image_concurrency': 10, 'oss_concurrency': 20},
+        'workflow': {'generate_prompts': True, 'generate_images': True, 'upload_oss': False},
+        'scheduler': {'enabled': True, 'interval_seconds': 600, 'stop_when_complete': True, 'max_cycles': None},
+        'oss': {'image_output': {'format': 'jpeg', 'quality': 95}},
+    })
+    write([row()])
+    w.print_execution_summary('summary-test')
+    output = capsys.readouterr().out
+    assert '批次: summary-test' in output
+    assert '副图目标: 每个商品至少 5 张新副图' in output
+    assert '文字调用: 并发=8' in output
+    assert '图片生成: 平台=tuzi' in output and '并发=10' in output
+    assert 'OSS: 并发=20' in output and '上传开关=关' in output
+    assert '轮询间隔=600秒' in output
 
 
 def test_old_batch_not_deleted(workspace):
@@ -717,7 +812,7 @@ def test_review_groups_images_local_generation_cache_and_human_fields(workspace,
     book = load_workbook(output)
     sheet = book['人工审核预览']
     header = [cell.value for cell in sheet[2]]
-    assert sheet.cell(1, 13).value == '参考图（沃尔玛平台素材）'
+    assert sheet.cell(1, 13).value == '参考图（输入素材）'
     assert sheet.cell(1, 15).value == '最新使用图（原主图＋最终副图）'
     assert sheet.cell(2, 13).fill.fgColor.rgb != sheet.cell(2, 15).fill.fgColor.rgb
     assert sheet.cell(3, header.index('GTIN') + 1).value == '00012345678905'

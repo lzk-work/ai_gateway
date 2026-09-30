@@ -98,8 +98,80 @@ def batch_paths(batch_name=None):
 def task_execution():
     return load_task_config().get('execution', {})
 
+def minimum_new_sub_images(config=None):
+    config = config if config is not None else load_task_config()
+    value = (config.get('image_selection') or {}).get('minimum_new_sub_images', 4)
+    if isinstance(value, bool):
+        raise ValueError('image_selection.minimum_new_sub_images必须是1到6的整数')
+    try:
+        value = int(value)
+    except (TypeError, ValueError):
+        raise ValueError('image_selection.minimum_new_sub_images必须是1到6的整数') from None
+    if not 1 <= value <= len(PROMPT_IMAGE_TYPES):
+        raise ValueError('image_selection.minimum_new_sub_images必须是1到6的整数')
+    return value
+
 def print_batch_info(batch_name=None):
     print(f"批次目录: {batch_paths(batch_name)['root']}")
+
+def print_execution_summary(batch_name=None, dry_run=False):
+    config = load_task_config()
+    execution = config.get('execution', {})
+    workflow = config.get('workflow', {})
+    scheduler = config.get('scheduler', {})
+    prompt_stage_config = load_stage_config('generate_prompts')
+    image_stage_config = load_stage_config('generate_images')
+    prompt_model = prompt_stage_config.get('execution', {}).get('model', {})
+    prompt_gateway = prompt_stage_config.get('execution', {}).get('gateway', {}).get('name', '未配置')
+    prompt_limits = prompt_stage_config.get('limits', {})
+    prompt_retry = prompt_stage_config.get('retry', {})
+    image_model = image_stage_config.get('execution', {}).get('model', {})
+    image_limits = image_stage_config.get('limits', {})
+    output = (config.get('oss') or {}).get('image_output') or {}
+    source = config.get('input', {})
+    batch = batch_paths(batch_name)
+    candidates = prompt_model.get('candidates') or []
+    print('\n=== Walmart 副图替换执行配置 ===')
+    print(f"模式: {'试运行（不调用接口、不写结果）' if dry_run else '正式运行'}")
+    print(f"批次: {batch['root'].name}")
+    print(f"批次目录: {batch['root']}")
+    print(f"输入Excel: {source.get('excel_path')} | Sheet: {source.get('sheet_name', 'Sheet1')} | max_records: {execution.get('max_records')}")
+    print(f"副图目标: 每个商品至少 {minimum_new_sub_images(config)} 张新副图；已有超过目标时全部保留")
+    print(
+        f"文字模型: 网关={prompt_gateway} | 首选={prompt_model.get('name')} | "
+        f"候选={','.join(candidates) if candidates else '无'} | stream={prompt_model.get('stream', False)} | "
+        f"max_tokens={prompt_model.get('max_tokens')}"
+    )
+    print(
+        f"文字调用: 并发={execution.get('concurrency', 1)} | "
+        f"请求启动间隔={prompt_limits.get('request_start_interval_seconds', 1)}秒 | "
+        f"失败等待={prompt_retry.get('retry_delay_seconds', 30)}秒"
+    )
+    print(
+        f"图片生成: 平台={config.get('image_provider')} | 模型={image_model.get('name')} | "
+        f"比例={image_model.get('aspect_ratio')} | 分辨率={image_model.get('resolution')} | "
+        f"质量={image_model.get('quality')} | 并发={execution.get('image_concurrency', 1)}"
+    )
+    print(
+        f"图片请求间隔(每个并发内): 提交={image_limits.get('submit_delay_seconds', 0)}秒 | "
+        f"查询={image_limits.get('query_delay_seconds', 0)}秒 | "
+        f"下载={image_limits.get('download_delay_seconds', 0)}秒"
+    )
+    print(
+        f"OSS: 并发={execution.get('oss_concurrency', 1)} | 输出格式={output.get('format', 'jpeg')} | "
+        f"JPEG质量={output.get('quality', 95)} | 上传开关={'开' if workflow.get('upload_oss', True) else '关'}"
+    )
+    print(
+        f"阶段开关: 提示词={'开' if workflow.get('generate_prompts', True) else '关'} | "
+        f"副图生成={'开' if workflow.get('generate_images', True) else '关'} | "
+        f"主图生成=关 | 主图上传=关"
+    )
+    print(
+        f"调度: {'启用' if scheduler.get('enabled', False) else '关闭'} | "
+        f"轮询间隔={scheduler.get('interval_seconds', 600)}秒 | "
+        f"完成后停止={'是' if scheduler.get('stop_when_complete', True) else '否'} | "
+        f"最大轮数={scheduler.get('max_cycles') if scheduler.get('max_cycles') is not None else '不限'}"
+    )
 
 def oss_settings():
     from ai_gateway.config.loader import load_local_env
@@ -125,10 +197,6 @@ def classify(url, role):
     if (main and sub) or (main and role != 'main') or (sub and role != 'sub'):
         raise ValueError('主副图角色或文件名标记冲突')
     return 'new' if main or sub else 'old'
-
-def valid_reference(url):
-    host, _ = url_parts(url)
-    return any(host == d or host.endswith('.' + d) for d in ('walmartimages.com', 'walmart.com'))
 
 def numbered_columns(row, prefix):
     values = []
@@ -165,6 +233,7 @@ def read_input(config):
 
 def analyze(config, settings=None):
     settings = settings if settings is not None else oss_settings()
+    target_sub_count = minimum_new_sub_images(config)
     data = read_input(config)
     duplicates = Counter((row.get('店铺', ''), row.get('结果SKU', '')) for _, row in data)
     limit = config.get('execution', {}).get('max_records')
@@ -176,7 +245,8 @@ def analyze(config, settings=None):
         r = {'record_id': digest([store, result])[:24], 'row_number': number, 'source_sku': source, 'result_sku': result, 'store': store,
             'gtin': row.get('GTIN') or None, 'product_type': row.get('商品类型') or None, 'title': row.get('标题', ''), 'bullets': row.get('五点', ''),
             'reference_main_url': row.get('参考主图链接', ''), 'reference_secondary_urls': numbered(row, '参考副图链接'),
-            'input_fingerprint': digest(row), 'existing': [], 'errors': [], 'oss_directory': None, 'need_main': 0, 'need_sub': 0}
+            'input_fingerprint': digest(row), 'existing': [], 'errors': [], 'oss_directory': None, 'need_main': 0, 'need_sub': 0,
+            'minimum_new_sub_images': target_sub_count}
         errors, seen, bases = r['errors'], set(), set()
         if not all((source, result, store)):
             errors.append('来源SKU、结果SKU、店铺不能为空')
@@ -233,7 +303,7 @@ def analyze(config, settings=None):
         if not row.get('已有主图链接', ''):
             errors.append('已有主图链接必填，主图原样保留')
         new_sub = [i for i in r['existing'] if i['role'] == 'sub' and i['kind'] == 'new']
-        r['need_main'], r['need_sub'] = 0, max(0, 4 - len(new_sub))
+        r['need_main'], r['need_sub'] = 0, max(0, target_sub_count - len(new_sub))
         if r['need_main'] or r['need_sub']:
             if not r['oss_directory']:
                 errors.append('无法唯一确定OSS原路径基座' if bases else '没有已有OSS链接，无法确定原目录')
@@ -242,14 +312,26 @@ def analyze(config, settings=None):
             for url in [r['reference_main_url'], *r['reference_secondary_urls']]:
                 if url:
                     try:
-                        if not valid_reference(url):
-                            errors.append('参考图必须是沃尔玛平台URL')
+                        url_parts(url)
                     except ValueError as exc:
                         errors.append(str(exc))
         if r['need_sub'] and not (r['title'] and r['bullets']):
             errors.append('生成副图需要标题和五点')
         records.append(r)
     return records
+
+def add_planned_tasks(record):
+    record['tasks'] = []
+    if record['errors']:
+        return
+    for role, count in (('main', record['need_main']), ('sub', record['need_sub'])):
+        for index in range(1, count + 1):
+            image_id = uuid.uuid4().hex
+            now = datetime.now(timezone.utc)
+            stamp = now.strftime('%Y%m%dT%H%M%S') + f'{now.microsecond // 1000:03d}Z'
+            name = f"new_{role}_{safe_name(record['source_sku'])}_{stamp}_{image_id[:12]}"
+            record['tasks'].append({'image_id': image_id, 'role': role, 'ordinal': index, 'image_name': name,
+                'plan_created_at': now.isoformat(timespec='milliseconds')})
 
 def prepare(batch_name=None, dry_run=False):
     config, paths = load_task_config(), batch_paths(batch_name)
@@ -262,11 +344,25 @@ def prepare(batch_name=None, dry_run=False):
         marker = read_json(paths['marker'])
         if marker.get('schema_version') != SCHEMA_VERSION or marker.get('provider') != provider:
             raise ValueError('批次布局或平台冲突，请切回或使用新批次')
+        batch_target = int(marker.get('minimum_new_sub_images', 4))
+        if batch_target != minimum_new_sub_images(config):
+            raise ValueError('图片目标数量变化，请使用新批次，避免已有付费任务与新目标混用')
         previous = load_jsonl(paths['plan'])
         identity = lambda r: (r['row_number'], r['record_id'], r['input_fingerprint'])
         if len(current) < len(previous) or any(identity(old) != identity(new)
                 for old, new in zip(previous, current)):
             raise ValueError('input_changed：已有行内容、行号或处理范围变化；原批次只允许末尾追加新行，请恢复原输入或使用新批次')
+        refreshed = False
+        for old, analyzed in zip(previous, current):
+            if old.get('errors') != analyzed['errors']:
+                old['errors'] = analyzed['errors']
+                refreshed = True
+            if not old['errors'] and not old.get('tasks') and (old['need_main'] or old['need_sub']):
+                add_planned_tasks(old)
+                refreshed = True
+        if refreshed and not dry_run:
+            save_jsonl(paths['plan'], previous)
+            save_jsonl(paths['inventory'], previous)
         current = current[len(previous):]
         if not current:
             return previous
@@ -275,21 +371,13 @@ def prepare(batch_name=None, dry_run=False):
     elif paths['root'].exists() and any(paths['root'].iterdir()):
         raise ValueError('批次有历史文件但无新布局标记，请使用新批次')
     for r in current:
-        r['tasks'] = []
-        if r['errors']:
-            continue
-        for role, count in (('main', r['need_main']), ('sub', r['need_sub'])):
-            for index in range(1, count + 1):
-                image_id = uuid.uuid4().hex
-                now = datetime.now(timezone.utc)
-                stamp = now.strftime('%Y%m%dT%H%M%S') + f'{now.microsecond // 1000:03d}Z'
-                name = f"new_{role}_{safe_name(r['source_sku'])}_{stamp}_{image_id[:12]}"
-                r['tasks'].append({'image_id': image_id, 'role': role, 'ordinal': index, 'image_name': name, 'plan_created_at': now.isoformat(timespec='milliseconds')})
+        add_planned_tasks(r)
     current = previous + current
     if not dry_run:
         save_jsonl(paths['plan'], current)
         save_jsonl(paths['inventory'], current)
-        save_json(paths['marker'], {'schema_version': SCHEMA_VERSION, 'provider': provider})
+        save_json(paths['marker'], {'schema_version': SCHEMA_VERSION, 'provider': provider,
+            'minimum_new_sub_images': minimum_new_sub_images(config)})
     return current
 
 def validate_prompt(text, count):
@@ -606,9 +694,10 @@ def build_results(records, paths):
         errors = [*r['errors'], *task_errors]
         if len(main) != 1:
             errors.append('保留主图缺失或不唯一')
-        if len(sub) < 4:
-            errors.append(f'新副图不足4张：当前{len(sub)}张')
-        complete = not r['errors'] and len(main) == 1 and len(sub) >= 4
+        target_sub_count = int(r.get('minimum_new_sub_images', 4))
+        if len(sub) < target_sub_count:
+            errors.append(f'新副图不足{target_sub_count}张：当前{len(sub)}张')
+        complete = not r['errors'] and len(main) == 1 and len(sub) >= target_sub_count
         prompt_result = prompt_results.get(r['record_id'], {})
         if not complete and r['need_sub'] and prompt_result.get('status') in ('failed', 'failed_permanent', 'invalid'):
             output = paths['full_outputs'] / f"{r['record_id']}.json"
@@ -639,7 +728,17 @@ def write_reports(payloads, manifests, paths):
         for p in payloads:
             items = [i for i in manifests if i['record_id'] == p['record_id'] and selector(i)]
             main = [i['url'] for i in items if i['role'] == 'main']
-            sub = [i['url'] for i in items if i['role'] == 'sub']
+            sub_items = [i for i in items if i['role'] == 'sub']
+            if name == 'latest_used_urls':
+                # Put this batch's generated images first for the downstream
+                # Walmart image order. Preserve plan order for generated images
+                # and source-column order for retained existing images.
+                sub_items.sort(key=lambda i: (
+                    0 if i.get('origin') == 'generated' else 1,
+                    int((i.get('ordinal') if i.get('origin') == 'generated' else i.get('input_order')) or 10**9),
+                    i.get('image_name') or '',
+                ))
+            sub = [i['url'] for i in sub_items]
             generated = [i for i in manifests if i['record_id'] == p['record_id'] and i['origin'] == 'generated']
             output.append({**p, 'main_image_url': main[0] if main else None, 'secondary_urls': sub,
                 'planned_count': len(generated), 'generated_count': sum(i.get('generation_status') == 'success' for i in generated),
@@ -708,6 +807,7 @@ def main(only=None):
     interval = int(scheduler.get('interval_seconds', 600))
     if interval <= 0:
         raise ValueError('scheduler.interval_seconds必须大于0')
+    print_execution_summary(args.batch_name, args.dry_run)
     cycle = 0
     while True:
         cycle += 1
