@@ -350,11 +350,27 @@ def process_one(
     if result.get("success"):
         status = "skipped" if result.get("skipped") else "success"
         url = client.public_url(row["oss_key"])
+        if config.delete_source_after_upload and source_path != local_path and source_path.is_file():
+            try:
+                if not update_generation_local_path(config, row, local_path):
+                    raise RuntimeError("生成断点中未找到对应图片，未删除源PNG")
+            except Exception as exc:
+                # The object is already on OSS, but this row must remain
+                # retryable until the local generation checkpoint durably
+                # points at the JPEG. Otherwise the next generation cycle can
+                # download the PNG again.
+                record = build_record(
+                    row, "sync_failed", url,
+                    f"OSS已成功，但生成断点同步失败，保留源PNG: {exc}",
+                    retryable=True, file_size=result.get("size"),
+                )
+                checkpoint.upsert(record)
+                print(f"[{index}/{total}] 断点同步失败 | SKU={sku} | 保留源PNG | 错误={short_error(str(exc))}", flush=True)
+                return record
         record = build_record(row, status, url, None, retryable=False, file_size=result.get("size"))
         checkpoint.upsert(record)
         if config.delete_source_after_upload and source_path != local_path and source_path.is_file():
             try:
-                update_generation_local_path(config, row, local_path)
                 source_path.unlink()
             except OSError as exc:
                 print(f"[{index}/{total}] 警告 | SKU={sku} | OSS已成功，但删除源图失败: {exc}", flush=True)
@@ -506,10 +522,10 @@ def prepare_upload_image(source_path: Path, config: OssUploadConfig) -> tuple[Pa
     return planned, "jpg"
 
 
-def update_generation_local_path(config: OssUploadConfig, row: dict[str, Any], local_path: Path) -> None:
+def update_generation_local_path(config: OssUploadConfig, row: dict[str, Any], local_path: Path) -> bool:
     """Append the JPG path to the generation checkpoint before deleting PNG."""
     if not config.image_results_path:
-        return
+        return False
     results_path = Path(config.image_results_path).resolve()
     checkpoint_path = generation_checkpoint_path(results_path)
     key = row_key(row)
@@ -522,7 +538,17 @@ def update_generation_local_path(config: OssUploadConfig, row: dict[str, Any], l
             _GENERATION_RECORD_CACHE[checkpoint_path] = records
         saved = records.get(key)
         if not saved:
-            return
+            # The uploader lives for the whole scheduled process, while new
+            # generation records are appended on every cycle. Refresh a stale
+            # process-wide cache on miss instead of deleting PNG against an
+            # obsolete snapshot.
+            refreshed = latest_rows_by_key(checkpoint_path)
+            if not refreshed:
+                refreshed = latest_rows_by_key(results_path)
+            records.update(refreshed)
+            saved = records.get(key)
+        if not saved:
+            return False
         updated = dict(saved)
         # A validated local image has already been accepted by OSS at this
         # point.  Preserve that terminal fact even when the process-wide cache
@@ -533,6 +559,7 @@ def update_generation_local_path(config: OssUploadConfig, row: dict[str, Any], l
         updated["file_size"] = local_path.stat().st_size
         append_jsonl_row(checkpoint_path, updated)
         records[key] = updated
+        return True
 
 
 def generation_checkpoint_path(results_path: Path) -> Path:

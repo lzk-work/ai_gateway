@@ -77,6 +77,13 @@ class CompressionTests(unittest.TestCase):
             root = Path(tmp)
             source = root / "image.png"
             Image.new("RGB", (40, 40), "white").save(source)
+            import json
+            generation = root / "image_generation_results.jsonl"
+            checkpoint = root / "image_generation_checkpoint.jsonl"
+            generated = {"row_number": 2, "sku": "sku", "image_name": "image", "status": "success",
+                         "downloaded_path": str(source), "file_size": source.stat().st_size}
+            generation.write_text(json.dumps(generated) + "\n", encoding="utf-8")
+            checkpoint.write_text(json.dumps(generated) + "\n", encoding="utf-8")
             row = {"row_number": 2, "sku": "sku", "image_name": "image",
                    "local_path": str(root / "image.jpg"), "source_path": str(source),
                    "oss_key": "develop/sku/image.jpg"}
@@ -89,12 +96,79 @@ class CompressionTests(unittest.TestCase):
                     return "https://example/" + key
 
             client = Client()
-            record = process_one(1, 1, row, config(root), client, CheckpointStore(root / "cp.jsonl"))
+            cfg = config(root)
+            cfg.image_results_path = str(generation)
+            record = process_one(1, 1, row, cfg, client, CheckpointStore(root / "cp.jsonl"))
             self.assertEqual(record.status, "success")
             self.assertTrue(record.local_path.endswith(".jpg"))
             self.assertTrue(record.oss_key.endswith(".jpg"))
             self.assertFalse(source.exists())
             self.assertTrue(Path(record.local_path).exists())
+
+    def test_cross_cycle_cache_miss_refreshes_before_source_delete(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            import json
+            from ai_gateway.subtasks.oss_upload_images import update_generation_local_path
+
+            root = Path(tmp)
+            generation = root / "image_generation_results.jsonl"
+            checkpoint = root / "image_generation_checkpoint.jsonl"
+            first_jpg = root / "first.jpg"
+            Image.new("RGB", (10, 10), "white").save(first_jpg)
+            first = {"row_number": 2, "sku": "first", "image_name": "first", "status": "success",
+                     "downloaded_path": str(first_jpg), "file_size": first_jpg.stat().st_size}
+            generation.write_text(json.dumps(first) + "\n", encoding="utf-8")
+            checkpoint.write_text(json.dumps(first) + "\n", encoding="utf-8")
+            cfg = config(root)
+            cfg.image_results_path = str(generation)
+            self.assertTrue(update_generation_local_path(cfg, first, first_jpg))  # populate process cache
+
+            source = root / "second.png"
+            Image.new("RGB", (20, 20), "blue").save(source)
+            second = {"row_number": 3, "sku": "second", "image_name": "second", "status": "success",
+                      "downloaded_path": str(source), "file_size": source.stat().st_size}
+            with checkpoint.open("a", encoding="utf-8") as handle:
+                handle.write(json.dumps(second) + "\n")
+            row = {"row_number": 3, "sku": "second", "image_name": "second",
+                   "local_path": str(root / "second.jpg"), "source_path": str(source),
+                   "oss_key": "develop/second/second.jpg"}
+
+            class Client:
+                def upload_file(self, local_path, key, overwrite=True):
+                    return {"success": True, "size": Path(local_path).stat().st_size}
+                def public_url(self, key):
+                    return "https://example/" + key
+
+            record = process_one(1, 1, row, cfg, Client(), CheckpointStore(root / "oss.jsonl"))
+            self.assertEqual(record.status, "success")
+            self.assertFalse(source.exists())
+            latest = json.loads(checkpoint.read_text(encoding="utf-8").splitlines()[-1])
+            self.assertEqual(latest["status"], "success")
+            self.assertTrue(latest["downloaded_path"].endswith("second.jpg"))
+
+    def test_missing_generation_record_preserves_source_png(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "image.png"
+            Image.new("RGB", (20, 20), "white").save(source)
+            generation = root / "image_generation_results.jsonl"
+            generation.write_text("", encoding="utf-8")
+            cfg = config(root)
+            cfg.image_results_path = str(generation)
+            row = {"row_number": 2, "sku": "missing", "image_name": "image",
+                   "local_path": str(root / "image.jpg"), "source_path": str(source),
+                   "oss_key": "develop/missing/image.jpg"}
+
+            class Client:
+                def upload_file(self, local_path, key, overwrite=True):
+                    return {"success": True, "size": Path(local_path).stat().st_size}
+                def public_url(self, key):
+                    return "https://example/" + key
+
+            record = process_one(1, 1, row, cfg, Client(), CheckpointStore(root / "oss.jsonl"))
+            self.assertEqual(record.status, "sync_failed")
+            self.assertTrue(record.retryable)
+            self.assertTrue(source.exists())
 
     def test_generation_paths_append_immediately_and_summary_syncs_once(self):
         with tempfile.TemporaryDirectory() as tmp:
