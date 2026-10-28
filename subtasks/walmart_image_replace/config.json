@@ -2,11 +2,11 @@
   "name": "walmart_image_replace",
   "description": "Prepare new image sets using source-SKU directories; no Walmart API calls.",
   "input": {
-    "excel_path": "subtasks/walmart_image_replace/input/image_replace_4-1-test.xlsx",
+    "excel_path": "subtasks/walmart_image_replace/input/image_replace_8.xlsx",
     "sheet_name": "Sheet1"
   },
   "execution": {
-    "max_records": 10000,
+    "max_records": 12000,
     "concurrency": 8,
     "image_concurrency": 10,
     "oss_concurrency": 20
@@ -16,11 +16,14 @@
     "generate_main_image": false,
     "upload_main_image": false,
     "generate_images": true,
-    "upload_oss": false
+    "upload_oss": true
   },
   "image_provider": "tuzi",
   "image_generation": {
     "max_regenerations_per_image": 6
+  },
+  "image_selection": {
+    "minimum_new_sub_images": 4
   },
   "oss": {
     "image_output": {
