@@ -8,9 +8,7 @@ import json
 from pathlib import Path
 
 import openpyxl
-from openpyxl.drawing.image import Image as XLImage
-from openpyxl.styles import Alignment, Font, PatternFill
-from openpyxl.utils import get_column_letter
+import xlsxwriter
 from PIL import Image
 
 from workflow_common import BATCHES_ROOT, batch_name, load_task_config, paths
@@ -115,56 +113,54 @@ def write_review_part(
     image_headers = ["主图", *[f"副图{i}" for i in range(1, max_images)]]
     link_headers = [f"{name}链接" for name in image_headers]
     headers = ["SKU", "标题", "五点", "描述", *image_headers, *link_headers]
-    workbook = openpyxl.Workbook()
-    sheet = workbook.active
-    sheet.title = "审核预览"
-    sheet.append(headers)
-    sheet.freeze_panes = "E2"
-    for cell in sheet[1]:
-        cell.font = Font(bold=True, color="FFFFFF")
-        cell.fill = PatternFill("solid", fgColor="1F4E78")
-        cell.alignment = Alignment(horizontal="center", vertical="center")
+    output.parent.mkdir(parents=True, exist_ok=True)
+    workbook = xlsxwriter.Workbook(output)
+    sheet = workbook.add_worksheet("审核预览")
+    header_format = workbook.add_format({
+        "bold": True, "font_color": "#FFFFFF", "bg_color": "#1F4E78",
+        "align": "center", "valign": "vcenter",
+    })
+    wrap_format = workbook.add_format({"text_wrap": True, "valign": "top"})
+    link_format = workbook.add_format({"font_color": "#0563C1", "underline": True})
+    missing_format = workbook.add_format({"align": "center", "valign": "vcenter"})
+    sheet.write_row(0, 0, headers, header_format)
+    sheet.freeze_panes(1, 4)
 
-    image_start = 5
+    image_start = 4
     link_start = image_start + max_images
     embedded = linked = 0
-    for row_number, sku in enumerate(skus, start=2):
+    for row_number, sku in enumerate(skus, start=1):
         meta = metadata.get(sku, {})
-        sheet.cell(row_number, 1, sku)
-        sheet.cell(row_number, 2, meta.get("title", ""))
-        sheet.cell(row_number, 3, meta.get("features", ""))
-        sheet.cell(row_number, 4, meta.get("description", ""))
-        for column in range(2, 5):
-            sheet.cell(row_number, column).alignment = Alignment(wrap_text=True, vertical="top")
+        sheet.write(row_number, 0, sku)
+        sheet.write(row_number, 1, meta.get("title", ""), wrap_format)
+        sheet.write(row_number, 2, meta.get("features", ""), wrap_format)
+        sheet.write(row_number, 3, meta.get("description", ""), wrap_format)
         for offset, record in enumerate(grouped[sku]):
             source = Path(str(record.get("downloaded_path") or ""))
             result = thumbnail(source) if source.is_file() else None
             if result:
-                width, height, data = result
-                picture = XLImage(data)
-                picture.width, picture.height = width, height
-                sheet.add_image(picture, f"{get_column_letter(image_start + offset)}{row_number}")
+                _width, _height, data = result
+                sheet.embed_image(
+                    row_number,
+                    image_start + offset,
+                    "thumbnail.jpg",
+                    {"image_data": data, "description": str(record.get("image_name") or "商品图片")},
+                )
                 embedded += 1
             else:
-                sheet.cell(row_number, image_start + offset, "本地图片缺失")
+                sheet.write(row_number, image_start + offset, "本地图片缺失", missing_format)
             key = f"{sku}::{record.get('image_name')}"
             url = oss_urls.get(key, "")
             if url:
-                cell = sheet.cell(row_number, link_start + offset, url)
-                cell.hyperlink = url
-                cell.font = Font(color="0563C1", underline="single")
+                sheet.write_url(row_number, link_start + offset, url, link_format, url)
                 linked += 1
-        sheet.row_dimensions[row_number].height = THUMB_SIZE * 0.75 + 6
+        sheet.set_row(row_number, THUMB_SIZE * 0.75 + 6)
 
-    for column, width in {"A": 22, "B": 35, "C": 45, "D": 45}.items():
-        sheet.column_dimensions[column].width = width
-    for column in range(image_start, link_start):
-        sheet.column_dimensions[get_column_letter(column)].width = THUMB_SIZE / 7 + 2
-    for column in range(link_start, link_start + max_images):
-        sheet.column_dimensions[get_column_letter(column)].width = 40
-    sheet.auto_filter.ref = f"A1:{get_column_letter(len(headers))}{len(skus) + 1}"
-    output.parent.mkdir(parents=True, exist_ok=True)
-    workbook.save(output)
+    for column, width in enumerate((22, 35, 45, 45)):
+        sheet.set_column(column, column, width)
+    sheet.set_column(image_start, link_start - 1, THUMB_SIZE / 7 + 2)
+    sheet.set_column(link_start, link_start + max_images - 1, 40)
+    sheet.autofilter(0, 0, len(skus), len(headers) - 1)
     workbook.close()
     return {"embedded": embedded, "linked": linked}
 

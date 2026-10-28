@@ -30,9 +30,7 @@ sys.path.insert(0, str(SCRIPT_DIR))
 
 from PIL import Image  # noqa: E402
 import openpyxl  # noqa: E402
-from openpyxl.drawing.image import Image as XLImage  # noqa: E402
-from openpyxl.styles import Font  # noqa: E402
-from openpyxl.utils import get_column_letter  # noqa: E402
+import xlsxwriter  # noqa: E402
 from workflow_common import (  # noqa: E402
     batch_name_from_input,
     batch_paths,
@@ -202,41 +200,41 @@ def export(batch: str, out_path: Path) -> None:
 
     success_count = oss_link_count = 0
     for output, part_skus in zip(outputs, sku_parts):
-        wb = openpyxl.Workbook()
-        ws = wb.active
-        ws.title = "审核预览"
+        wb = xlsxwriter.Workbook(output)
+        ws = wb.add_worksheet("审核预览")
+        header_format = wb.add_format({"bold": True})
+        wrap_format = wb.add_format({"text_wrap": True, "valign": "top"})
+        link_format = wb.add_format({"font_color": "#0563C1", "underline": True})
+        missing_format = wb.add_format({"align": "center", "valign": "vcenter"})
         img_header = ["主图"] + [f"副图{i}" for i in range(1, max_imgs)]
         link_header = ["主图链接"] + [f"副图{i}链接" for i in range(1, max_imgs)]
         header = ["SKU", "标题", "五点"] + img_header + link_header
-        ws.append(header)
-        for col_idx in range(1, len(header) + 1):
-            ws.cell(row=1, column=col_idx).font = Font(bold=True)
-        ws.freeze_panes = "D2"
+        ws.write_row(0, 0, header, header_format)
+        ws.freeze_panes(1, 3)
         info_width = 3
-        img_start = info_width + 1
+        img_start = info_width
         link_start = img_start + max_imgs
         part_images = 0
-        for row_idx, sku in enumerate(part_skus, start=2):
+        for row_idx, sku in enumerate(part_skus, start=1):
             meta = source_meta.get(sku, {})
-            ws.cell(row=row_idx, column=1, value=sku)
-            ws.cell(row=row_idx, column=2, value=meta.get("title", ""))
-            ws.cell(row=row_idx, column=3, value=meta.get("bullets", ""))
-            ws.cell(row=row_idx, column=3).alignment = openpyxl.styles.Alignment(wrap_text=True, vertical="top")
+            ws.write(row_idx, 0, sku)
+            ws.write(row_idx, 1, meta.get("title", ""))
+            ws.write(row_idx, 2, meta.get("bullets", ""), wrap_format)
             imgs = images_for(sku)
-            max_h = THUMB_SIZE
             for j, rec in enumerate(imgs):
                 col_idx = img_start + j
-                col = get_column_letter(col_idx)
                 src = rec.get("downloaded_path")
                 thumb = make_thumbnail(Path(str(src))) if src and Path(str(src)).exists() else None
                 if not thumb:
-                    ws.cell(row=row_idx, column=col_idx, value="生成失败/缺失")
+                    ws.write(row_idx, col_idx, "生成失败/缺失", missing_format)
                     continue
-                w, h, buf = thumb
-                max_h = max(max_h, h)
-                xl_img = XLImage(buf)
-                xl_img.width, xl_img.height = w, h
-                ws.add_image(xl_img, f"{col}{row_idx}")
+                _w, _h, buf = thumb
+                ws.embed_image(
+                    row_idx,
+                    col_idx,
+                    "thumbnail.jpg",
+                    {"image_data": buf, "description": str(rec.get("image_name") or "商品图片")},
+                )
                 success_count += 1
                 part_images += 1
             for j, rec in enumerate(imgs):
@@ -244,19 +242,14 @@ def export(batch: str, out_path: Path) -> None:
                 url = oss_map.get(f"{sku}::{rec.get('image_name')}")
                 if url:
                     oss_link_count += 1
-                    cell = ws.cell(row=row_idx, column=col_idx, value=str(url))
-                    cell.hyperlink = str(url)
-                    cell.font = Font(color="0563C1", underline="single")
-            ws.row_dimensions[row_idx].height = max_h * 0.75 + 6
-        ws.column_dimensions["A"].width = 22
-        ws.column_dimensions["B"].width = 30
-        ws.column_dimensions["C"].width = 45
-        for col_idx in range(img_start, link_start):
-            ws.column_dimensions[get_column_letter(col_idx)].width = THUMB_SIZE / 7.0 + 2
-        for col_idx in range(link_start, link_start + max_imgs):
-            ws.column_dimensions[get_column_letter(col_idx)].width = 40
-        ws.auto_filter.ref = f"A1:{get_column_letter(len(header))}{len(part_skus) + 1}"
-        wb.save(output)
+                    ws.write_url(row_idx, col_idx, str(url), link_format, str(url))
+            ws.set_row(row_idx, THUMB_SIZE * 0.75 + 6)
+        ws.set_column(0, 0, 22)
+        ws.set_column(1, 1, 30)
+        ws.set_column(2, 2, 45)
+        ws.set_column(img_start, link_start - 1, THUMB_SIZE / 7.0 + 2)
+        ws.set_column(link_start, link_start + max_imgs - 1, 40)
+        ws.autofilter(0, 0, len(part_skus), len(header) - 1)
         wb.close()
         print(f"分卷完成: {output.name} | SKU={len(part_skus)} | 图片={part_images}")
     print(f"\n=== 审核预览导出完成 ===")
@@ -274,7 +267,7 @@ def main() -> None:
     args = parser.parse_args()
 
     batch = args.batch or batch_name_from_input()
-    out_path = batch_paths(batch)["root"] / "07_review" / "审核预览.xlsx"
+    out_path = batch_paths(batch)["root"] / "07_review" / "生成图片审核预览.xlsx"
     print(f"批次: {batch}")
     print(f"输出: {out_path}")
     export(batch, out_path)
