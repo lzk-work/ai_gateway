@@ -1,0 +1,33 @@
+{
+  "task": {
+    "name": "keyword_1688",
+    "version": "1.0.0",
+    "description": "根据商品文本和1688标题提取中文关键词"
+  },
+  "input": {
+    "type": "excel",
+    "default_path": "input/1688_key_words.xlsx",
+    "sheet_name": null,
+    "header_row": 1
+  },
+  "prompt": {
+    "template": "prompt.txt"
+  },
+  "gateway": {
+    "name": "tuzi_text",
+    "model": "gpt-5.6-luna",
+    "max_tokens": 1200,
+    "temperature": 0.1
+  },
+  "execution": {
+    "concurrency": 15,
+    "request_start_interval_seconds": 1.0,
+    "retry_delay_seconds": 3,
+    "validation_retry_count": 1
+  },
+  "response": {
+    "type": "fixed_fields",
+    "fields": ["SKU", "产品识别", "1688原始标题", "提取关键词"],
+    "required_fields": ["SKU", "产品识别", "1688原始标题", "提取关键词"]
+  }
+}

@@ -1,0 +1,4 @@
+batches/
+__pycache__/
+tasks/*/batches/
+tasks/*/input/*.xlsx
