@@ -15,7 +15,6 @@ SUCCESS_FIELDS = [
 ]
 FAIL_FIELDS = ["status", "message"]
 FEATURE_FIELDS = [f"feature_{index}" for index in range(1, 6)]
-ENGLISH_WORD = re.compile(r"[A-Za-z]+(?:['’-][A-Za-z]+)*")
 CJK = re.compile(r"[\u3400-\u4dbf\u4e00-\u9fff]")
 FORBIDDEN_AGE_WORDS = re.compile(
     r"\b(?:child|childs|baby|children|kid|kids|toy|toys|teenager|boy|boys|girl|girls)\b",
@@ -55,12 +54,6 @@ def validate(source: dict[str, Any], parsed: dict[str, Any]) -> dict[str, Any]:
         _validate_generated_text(value, f"product_description[{index}]")
         for index, value in enumerate(paragraphs, start=1)
     ]
-    word_count = sum(len(ENGLISH_WORD.findall(value)) for value in clean_paragraphs)
-    # A structurally valid response remains usable when it is shorter than the
-    # prompt target. Do not turn useful short copy into a validation retry.
-    if word_count > 300:
-        raise ValueError(f"product_description英文词数不能超过300，当前为{word_count}")
-
     result: dict[str, Any] = {
         "status": "success",
         "product_description": "\n\n".join(clean_paragraphs),

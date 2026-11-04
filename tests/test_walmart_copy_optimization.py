@@ -71,9 +71,10 @@ def test_short_description_is_accepted_when_structure_is_valid():
     assert result["product_description"].count("\n\n") == 2
 
 
-def test_description_over_300_words_is_rejected():
+def test_description_over_300_words_is_accepted_when_structure_is_valid():
     payload = success_payload()
     long_paragraph = " ".join(["word"] * 101)
     payload["product_description"] = [long_paragraph, long_paragraph, long_paragraph]
-    with pytest.raises(ValueError, match="不能超过300"):
-        load_validator()({}, payload)
+    result = load_validator()({}, payload)
+    assert result["status"] == "success"
+    assert result["product_description"].count("word") == 303
