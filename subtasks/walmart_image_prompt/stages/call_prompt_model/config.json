@@ -8,8 +8,7 @@
     "model": {
       "name": "gpt-5.6-luna",
       "candidates": [
-        "gpt-5.6-luna",
-        "gpt-5.4"
+        "gpt-6-luna"
       ],
       "refresh_on_error": true,
       "stream": false,

@@ -106,7 +106,7 @@ class ReplicationWorkflowTests(unittest.TestCase):
     def test_builds_one_task_per_existing_sub_image_with_two_references(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            source = root / "source.xlsx"
+            source = root / "gx-未出单-未交付.xlsx"
             output = root / "tasks.xlsx"
             template = root / "prompt.txt"
             template.write_text("T={{标题}} F={{五点}} D={{描述}}", encoding="utf-8")

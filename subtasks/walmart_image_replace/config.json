@@ -20,7 +20,7 @@
   },
   "image_provider": "tuzi",
   "image_generation": {
-    "max_regenerations_per_image": 6
+    "max_regenerations_per_image": 8
   },
   "image_selection": {
     "minimum_new_sub_images": 4
