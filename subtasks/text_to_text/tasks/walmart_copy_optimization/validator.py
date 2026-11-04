@@ -56,8 +56,10 @@ def validate(source: dict[str, Any], parsed: dict[str, Any]) -> dict[str, Any]:
         for index, value in enumerate(paragraphs, start=1)
     ]
     word_count = sum(len(ENGLISH_WORD.findall(value)) for value in clean_paragraphs)
-    if not 150 <= word_count <= 300:
-        raise ValueError(f"product_description英文词数必须为150到300，当前为{word_count}")
+    # A structurally valid response remains usable when it is shorter than the
+    # prompt target. Do not turn useful short copy into a validation retry.
+    if word_count > 300:
+        raise ValueError(f"product_description英文词数不能超过300，当前为{word_count}")
 
     result: dict[str, Any] = {
         "status": "success",

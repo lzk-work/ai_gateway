@@ -59,8 +59,21 @@ def test_success_response_requires_exact_field_order():
         load_validator()({}, payload)
 
 
-def test_description_word_count_is_enforced():
+def test_short_description_is_accepted_when_structure_is_valid():
     payload = success_payload()
-    payload["product_description"] = ["Too short.", "Still short.", "Not enough words."]
-    with pytest.raises(ValueError, match="英文词数"):
+    payload["product_description"] = [
+        "Short first paragraph.",
+        "Short second paragraph.",
+        "Short third paragraph.",
+    ]
+    result = load_validator()({}, payload)
+    assert result["status"] == "success"
+    assert result["product_description"].count("\n\n") == 2
+
+
+def test_description_over_300_words_is_rejected():
+    payload = success_payload()
+    long_paragraph = " ".join(["word"] * 101)
+    payload["product_description"] = [long_paragraph, long_paragraph, long_paragraph]
+    with pytest.raises(ValueError, match="不能超过300"):
         load_validator()({}, payload)
