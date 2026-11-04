@@ -1,0 +1,49 @@
+{
+  "task": {
+    "name": "walmart_copy_optimization",
+    "version": "1.0.0",
+    "description": "根据商品标题、描述、五点及可选核验字段优化Walmart英文文案"
+  },
+  "input": {
+    "type": "excel",
+    "default_path": "input/source.xlsx",
+    "sheet_name": "五点入参",
+    "header_row": 1,
+    "required_placeholders": ["标题", "描述", "五点"]
+  },
+  "prompt": {
+    "template": "prompt.txt"
+  },
+  "gateway": {
+    "name": "tuzi_text",
+    "model": "gpt-6-luna",
+    "max_tokens": 2000,
+    "temperature": 0.1
+  },
+  "execution": {
+    "concurrency": 10,
+    "request_start_interval_seconds": 1.0,
+    "retry_delay_seconds": 3,
+    "validation_retry_count": 1,
+    "max_rounds": 3,
+    "round_retry_delay_seconds": 300,
+    "auto_retry_statuses": [
+      "api_transient_failed",
+      "validation_failed"
+    ]
+  },
+  "response": {
+    "type": "json",
+    "fields": [
+      "status",
+      "product_description",
+      "feature_1",
+      "feature_2",
+      "feature_3",
+      "feature_4",
+      "feature_5",
+      "message"
+    ],
+    "validator": "validator.py"
+  }
+}
