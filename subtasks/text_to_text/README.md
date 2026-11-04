@@ -53,6 +53,22 @@ python subtasks\text_to_text\run.py --task keyword_1688 --batch-id <批次ID>
 python .\subtasks\text_to_text\run.py --task keyword_1688 --latest --retry-failed
 ```
 
+### 自动多轮重试
+
+核心引擎支持在一次启动中对允许的失败状态进行多轮重试。任务可在 `execution` 中配置：
+
+```json
+{
+  "max_rounds": 3,
+  "round_retry_delay_seconds": 15,
+  "auto_retry_statuses": ["api_transient_failed", "validation_failed"]
+}
+```
+
+`max_rounds` 包含第一轮。每一轮只重新提交上一轮中状态位于 `auto_retry_statuses` 的记录，已成功记录不会进入后续轮次。未配置时保持单轮执行；`api_transient_failed` 是默认可自动重试状态。
+
+按 `Ctrl+C` 后，引擎停止提交新记录，等待当前并发调用结束并保存结果。摘要中的 `interrupted` 为 `true`，尚未提交的记录保持原状态；使用 `--latest` 或原 `--batch-id` 可继续同一批次。
+
 该参数不会重跑请求指纹未变化的成功记录。
 
 任务也可以选择性读取多个图片链接列，并将文字和图片放在同一个 `user` 消息中发送。未配置图片列的任务仍按原来的纯文本格式发送。

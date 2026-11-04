@@ -5,7 +5,8 @@ import json
 import re
 import threading
 import time
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from collections import Counter
+from concurrent.futures import Future, ThreadPoolExecutor, as_completed
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -197,18 +198,86 @@ class TextBatchEngine:
                 if record.action == "rerun" or self._should_run(
                     old, record.input_hash, retry_failed=retry_failed
                 ):
-                    store.stage(record, "pending")
                     pending.append(record)
             if max_records and max_records > 0:
                 pending = pending[:max_records]
-            results = self._execute(pending, store)
+            maximum_rounds = max(int(self.task.execution.get("max_rounds", 1)), 1)
+            retry_statuses = {
+                str(status).strip()
+                for status in self.task.execution.get(
+                    "auto_retry_statuses", ["api_transient_failed"]
+                )
+                if str(status).strip()
+            }
+            round_delay = max(
+                float(self.task.execution.get("round_retry_delay_seconds", 0)), 0.0
+            )
+            current = pending
+            latest_results: dict[str, CallResult] = {}
+            rounds_completed = 0
+            interrupted = False
+            for round_number in range(1, maximum_rounds + 1):
+                if not current:
+                    break
+                print(
+                    f"\n=== 第 {round_number}/{maximum_rounds} 轮："
+                    f"待处理 {len(current)} 条 ==="
+                )
+                round_started = time.monotonic()
+                round_results, round_interrupted = self._execute(
+                    current,
+                    store,
+                    round_number=round_number,
+                    maximum_rounds=maximum_rounds,
+                )
+                rounds_completed = round_number
+                latest_results.update((item.record_key, item) for item in round_results)
+                elapsed = time.monotonic() - round_started
+                self._print_round_summary(
+                    round_number,
+                    round_results,
+                    elapsed,
+                    interrupted=round_interrupted,
+                )
+                if round_interrupted:
+                    interrupted = True
+                    break
+                current = [
+                    record
+                    for record in current
+                    if latest_results.get(record.record_key)
+                    and latest_results[record.record_key].status in retry_statuses
+                ]
+                if current and round_number < maximum_rounds and round_delay:
+                    print(
+                        f"下一轮将重试 {len(current)} 条，"
+                        f"等待 {round_delay:g} 秒……"
+                    )
+                    time.sleep(round_delay)
             all_records = store.all()
             output_fields = list(self.task.response.get("fields") or [])
             export_results(source_path, self.paths.result, sheet_name, all_records, output_fields)
             self._write_jsonl(all_records)
+            selected_rows = {
+                record.record_key for record in pending
+            }
+            final_selected = [
+                record for record in all_records if record["record_key"] in selected_rows
+            ]
+            success_count = sum(
+                1 for item in final_selected if item["status"] == "success"
+            )
+            failed_count = sum(
+                1
+                for item in final_selected
+                if item["status"] not in {"success", "pending", "running"}
+            )
             return {"task": self.task.name, "batch_id": self.batch_id, "total": len(records),
-                    "selected": len(pending), "success": sum(1 for item in results if item.status == "success"),
-                    "failed": sum(1 for item in results if item.status != "success"), "result": str(self.paths.result)}
+                    "selected": len(pending),
+                    "success": success_count, "failed": failed_count,
+                    "remaining": len(pending) - success_count - failed_count,
+                    "rounds_completed": rounds_completed, "interrupted": interrupted,
+                    "result": str(self.paths.result)}
         finally:
             store.close()
 
@@ -223,11 +292,61 @@ class TextBatchEngine:
             return True
         if retry_failed and str(old["status"]).endswith("_failed"):
             return True
-        return old["status"] in {"pending", "api_transient_failed", "cancelled"}
+        return old["status"] in {"pending", "running", "api_transient_failed", "cancelled"}
 
-    def _execute(self, records: list[InputRecord], store: StateStore) -> list[CallResult]:
+    @staticmethod
+    def _print_round_summary(
+        round_number: int,
+        results: list[CallResult],
+        elapsed_seconds: float,
+        *,
+        interrupted: bool,
+    ) -> None:
+        counts = Counter(item.status for item in results)
+        labels = {
+            "success": "成功",
+            "api_transient_failed": "接口瞬时失败",
+            "api_permanent_failed": "接口永久失败",
+            "validation_failed": "结果校验失败",
+            "input_invalid": "输入无效",
+            "cancelled": "已取消",
+        }
+        preferred_order = [
+            "success",
+            "api_transient_failed",
+            "api_permanent_failed",
+            "validation_failed",
+            "input_invalid",
+            "cancelled",
+        ]
+        parts = [
+            f"{labels.get(status, status)} {counts[status]}"
+            for status in preferred_order
+            if counts[status]
+        ]
+        parts.extend(
+            f"{status} {count}"
+            for status, count in sorted(counts.items())
+            if status not in preferred_order
+        )
+        if not parts:
+            parts.append("完成 0")
+        state = "（已中断）" if interrupted else ""
+        print(
+            f"--- 第 {round_number} 轮汇总{state}："
+            f"{'，'.join(parts)}；耗时 {elapsed_seconds:.1f} 秒 ---"
+        )
+
+    def _execute(
+        self,
+        records: list[InputRecord],
+        store: StateStore,
+        *,
+        round_number: int = 1,
+        maximum_rounds: int = 1,
+    ) -> tuple[list[CallResult], bool]:
         if not records:
-            return []
+            return [], False
         app = load_app_config(self.project_root / "configs" / "gateways.yaml", self.project_root / "configs" / "models.yaml")
         gateway_name = self.task.gateway.get("name", "tuzi_text")
         gateway_config = app.gateways[gateway_name]
@@ -236,20 +355,64 @@ class TextBatchEngine:
         validator = load_validator(self.task.root, self.task.response.get("validator"))
         concurrency = max(int(self.task.execution.get("concurrency", 1)), 1)
         results: list[CallResult] = []
-        with ThreadPoolExecutor(max_workers=concurrency) as pool:
-            futures = {pool.submit(self._call_one, record, gateway, gateway_config, limiter, validator): record for record in records}
-            try:
-                for future in as_completed(futures):
-                    result = future.result()
-                    store.save(result)
-                    self._write_raw(result)
-                    results.append(result)
-                    print(f"[{len(results)}/{len(records)}] {result.record_key}: {result.status}")
-            except KeyboardInterrupt:
-                for future in futures:
-                    future.cancel()
-                raise
-        return results
+        saved: set[Future[CallResult]] = set()
+        iterator = iter(records)
+        active: dict[Future[CallResult], InputRecord] = {}
+        pool = ThreadPoolExecutor(max_workers=concurrency)
+
+        def submit_one(record: InputRecord) -> None:
+            # Only records actually handed to the executor become running. This
+            # preserves the previous state of records excluded by --max-records
+            # or not yet reached when the user pauses the batch.
+            store.stage(record, "running")
+            future = pool.submit(
+                self._call_one, record, gateway, gateway_config, limiter, validator
+            )
+            active[future] = record
+
+        for _ in range(min(concurrency, len(records))):
+            submit_one(next(iterator))
+
+        interrupted = False
+        try:
+            while active:
+                future = next(as_completed(active))
+                result = future.result()
+                store.save(result)
+                self._write_raw(result)
+                results.append(result)
+                saved.add(future)
+                active.pop(future)
+                print(
+                    f"[第 {round_number}/{maximum_rounds} 轮 "
+                    f"{len(results)}/{len(records)}] "
+                    f"{result.record_key}: {result.status}"
+                )
+                try:
+                    submit_one(next(iterator))
+                except StopIteration:
+                    pass
+        except KeyboardInterrupt:
+            interrupted = True
+            print("收到中断信号：停止提交新记录，等待当前调用结束并保存结果……")
+        finally:
+            pool.shutdown(wait=True, cancel_futures=True)
+            # Calls already in progress cannot be cancelled safely. Persist any
+            # result that completed while shutdown was waiting.
+            for future in list(active):
+                if future in saved or future.cancelled() or not future.done():
+                    continue
+                result = future.result()
+                store.save(result)
+                self._write_raw(result)
+                results.append(result)
+                saved.add(future)
+                print(
+                    f"[第 {round_number}/{maximum_rounds} 轮 "
+                    f"{len(results)}/{len(records)}] "
+                    f"{result.record_key}: {result.status}"
+                )
+        return results, interrupted
 
     def _call_one(self, record, gateway, gateway_config, limiter, validator) -> CallResult:
         now = lambda: datetime.now().astimezone().isoformat(timespec="seconds")
@@ -291,7 +454,8 @@ class TextBatchEngine:
                     return CallResult(record.record_key, record.source_row, record.input_hash, status,
                                       model=self.task.gateway["model"], attempts=attempt, error_category=type(exc).__name__,
                                       error_message=str(exc)[:1000], updated_at=now())
-            time.sleep(float(self.task.execution.get("retry_delay_seconds", 3)))
+            retry_delay = float(self.task.execution.get("retry_delay_seconds", 3))
+            time.sleep(retry_delay * attempt)
         raise RuntimeError(str(last_error))
 
     def _write_manifest(self, source_path: Path, sheet_name: str) -> None:

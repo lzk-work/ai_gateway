@@ -10,6 +10,7 @@ __pycache__/
 compression_test/
 scripts/output/
 temporary_patches/
+exports/
 
 .pytest_cache/
 

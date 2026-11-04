@@ -102,6 +102,7 @@ def test_resume_decision_uses_status_and_input_hash():
     assert not TextBatchEngine._should_run({"status": "success", "input_hash": "same"}, "same")
     assert TextBatchEngine._should_run({"status": "success", "input_hash": "old"}, "new")
     assert TextBatchEngine._should_run({"status": "api_transient_failed", "input_hash": "same"}, "same")
+    assert TextBatchEngine._should_run({"status": "running", "input_hash": "same"}, "same")
     assert not TextBatchEngine._should_run({"status": "input_invalid", "input_hash": "same"}, "same")
 
 
@@ -117,6 +118,127 @@ def test_retry_failed_selects_all_failures_but_not_success():
         "same",
         retry_failed=True,
     )
+
+
+def test_core_engine_retries_configured_failures_across_rounds(tmp_path, monkeypatch):
+    from ai_gateway.text_to_text.models import InputRecord
+
+    task_root = tmp_path / "task"
+    task_root.mkdir()
+    source = tmp_path / "source.xlsx"
+    source.write_bytes(b"test input")
+    task = TaskDefinition(
+        "rounds",
+        "1.0.0",
+        task_root,
+        {
+            "input": {},
+            "execution": {
+                "max_rounds": 3,
+                "round_retry_delay_seconds": 0,
+                "auto_retry_statuses": ["api_transient_failed", "validation_failed"],
+            },
+            "response": {"type": "raw_text"},
+        },
+        "{{ text }}",
+    )
+    records = [
+        InputRecord("row:2", 2, {"text": "a"}, "a", "hash-a"),
+        InputRecord("row:3", 3, {"text": "b"}, "b", "hash-b"),
+    ]
+    engine = TextBatchEngine(ROOT, ROOT / "subtasks" / "text_to_text", task, "batch")
+    monkeypatch.setattr(engine, "prepare", lambda *_args, **_kwargs: ("Sheet1", records, ["text"]))
+    monkeypatch.setattr("ai_gateway.text_to_text.engine.export_results", lambda *_args, **_kwargs: None)
+    calls = []
+
+    def fake_execute(selected, store, **_kwargs):
+        calls.append([record.record_key for record in selected])
+        round_number = len(calls)
+        results = []
+        for record in selected:
+            if record.record_key == "row:3" or round_number == 3:
+                status = "success"
+            elif round_number == 1:
+                status = "api_transient_failed"
+            else:
+                status = "validation_failed"
+            result = CallResult(
+                record.record_key,
+                record.source_row,
+                record.input_hash,
+                status,
+                parsed={},
+                updated_at="now",
+            )
+            store.save(result)
+            results.append(result)
+        return results, False
+
+    monkeypatch.setattr(engine, "_execute", fake_execute)
+    summary = engine.run(source)
+    assert calls == [["row:2", "row:3"], ["row:2"], ["row:2"]]
+    assert summary["success"] == 2
+    assert summary["failed"] == 0
+    assert summary["rounds_completed"] == 3
+    assert not summary["interrupted"]
+
+
+def test_interruption_stops_automatic_rounds_and_reports_remaining(tmp_path, monkeypatch):
+    from ai_gateway.text_to_text.models import InputRecord
+
+    task_root = tmp_path / "task"
+    task_root.mkdir()
+    source = tmp_path / "source.xlsx"
+    source.write_bytes(b"test input")
+    task = TaskDefinition(
+        "pause",
+        "1.0.0",
+        task_root,
+        {"input": {}, "execution": {"max_rounds": 3}, "response": {"type": "raw_text"}},
+        "{{ text }}",
+    )
+    records = [
+        InputRecord("row:2", 2, {"text": "a"}, "a", "hash-a"),
+        InputRecord("row:3", 3, {"text": "b"}, "b", "hash-b"),
+    ]
+    engine = TextBatchEngine(ROOT, ROOT / "subtasks" / "text_to_text", task, "batch")
+    monkeypatch.setattr(engine, "prepare", lambda *_args, **_kwargs: ("Sheet1", records, ["text"]))
+    monkeypatch.setattr("ai_gateway.text_to_text.engine.export_results", lambda *_args, **_kwargs: None)
+
+    def fake_execute(selected, store, **_kwargs):
+        record = selected[0]
+        result = CallResult(
+            record.record_key,
+            record.source_row,
+            record.input_hash,
+            "success",
+            parsed={},
+            updated_at="now",
+        )
+        store.save(result)
+        return [result], True
+
+    monkeypatch.setattr(engine, "_execute", fake_execute)
+    summary = engine.run(source)
+    assert summary["success"] == 1
+    assert summary["remaining"] == 1
+    assert summary["rounds_completed"] == 1
+    assert summary["interrupted"]
+
+
+def test_round_summary_is_simple_and_readable(capsys):
+    results = [
+        CallResult("row:2", 2, "a", "success"),
+        CallResult("row:3", 3, "b", "api_transient_failed"),
+        CallResult("row:4", 4, "c", "validation_failed"),
+    ]
+    TextBatchEngine._print_round_summary(1, results, 12.34, interrupted=False)
+    output = capsys.readouterr().out
+    assert "第 1 轮汇总" in output
+    assert "成功 1" in output
+    assert "接口瞬时失败 1" in output
+    assert "结果校验失败 1" in output
+    assert "耗时 12.3 秒" in output
 
 
 def test_generic_raw_text_task_dry_run_with_synthetic_excel():
@@ -159,6 +281,18 @@ def test_batch_output_is_nested_under_its_task():
     task = load_task(task_root / "tasks", "keyword_1688")
     engine = TextBatchEngine(ROOT, task_root, task, "batch_001")
     assert engine.paths.root == task.root / "batches" / "batch_001"
+
+
+def test_task_loader_preserves_prompt_whitespace_exactly(tmp_path):
+    task_root = tmp_path / "tasks" / "exact_prompt"
+    task_root.mkdir(parents=True)
+    (task_root / "task.json").write_text(
+        '{"task":{"name":"exact_prompt"},"prompt":{"template":"prompt.txt"}}',
+        encoding="utf-8",
+    )
+    expected = "\n  before {{ value }} after  \n\n"
+    (task_root / "prompt.txt").write_text(expected, encoding="utf-8")
+    assert load_task(tmp_path / "tasks", "exact_prompt").prompt == expected
 
 
 def test_multiple_image_columns_and_multiline_cells_are_collected_once():

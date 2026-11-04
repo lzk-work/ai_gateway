@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import shutil
 from pathlib import Path
 from typing import Any
@@ -81,6 +82,8 @@ def export_results(source: Path, destination: Path, sheet_name: str, records: li
         }
         for name, value in values.items():
             if name in columns:
+                if isinstance(value, (list, dict)):
+                    value = json.dumps(value, ensure_ascii=False)
                 sheet.cell(row, columns[name], value)
     sheet.freeze_panes = sheet.freeze_panes or "A2"
     sheet.auto_filter.ref = sheet.dimensions

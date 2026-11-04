@@ -43,5 +43,7 @@ def load_task(tasks_root: Path, name: str) -> TaskDefinition:
     if actual_name != name:
         raise ValueError(f"任务目录名与 task.name 不一致: {name} != {actual_name}")
     prompt_path = root / data.get("prompt", {}).get("template", "prompt.txt")
-    prompt = prompt_path.read_text(encoding="utf-8-sig").strip()
+    # Prompt files are protected user assets. Preserve their content exactly;
+    # trimming here would silently change the request sent to the gateway.
+    prompt = prompt_path.read_text(encoding="utf-8-sig")
     return TaskDefinition(actual_name, str(task.get("version") or "1.0.0"), root, data, prompt)
