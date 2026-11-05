@@ -64,6 +64,15 @@ class StateStore:
         )
         self.connection.commit()
 
+    def migrate_input_hash(self, record_key: str, old_hash: str, new_hash: str) -> bool:
+        """Update a known-compatible request hash without discarding its result."""
+        cursor = self.connection.execute(
+            "UPDATE records SET input_hash=?, updated_at=? WHERE record_key=? AND input_hash=?",
+            (new_hash, _now(), record_key, old_hash),
+        )
+        self.connection.commit()
+        return cursor.rowcount == 1
+
     def all(self) -> list[dict[str, Any]]:
         return [self._decode(row) for row in self.connection.execute("SELECT * FROM records ORDER BY source_row")]
 

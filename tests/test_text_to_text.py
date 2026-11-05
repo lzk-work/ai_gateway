@@ -41,6 +41,93 @@ def test_request_hash_changes_with_prompt_or_contract():
     assert first != request_hash("A", {"model": "m2"})
 
 
+def test_json_export_fields_do_not_change_canonical_request_hash(tmp_path):
+    from openpyxl import Workbook
+
+    source = tmp_path / "source.xlsx"
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet.append(["text"])
+    sheet.append(["hello"])
+    workbook.save(source)
+    workbook.close()
+
+    task = TaskDefinition(
+        "json_export",
+        "1.0.0",
+        tmp_path,
+        {
+            "input": {"type": "excel"},
+            "gateway": {"model": "model", "max_tokens": 100, "temperature": 0.1},
+            "response": {"type": "json", "fields": ["answer"]},
+        },
+        "{{ text }}",
+    )
+    engine = TextBatchEngine(ROOT, ROOT / "subtasks" / "text_to_text", task, "batch")
+    _, with_fields, _ = engine.prepare(source, create_snapshot=False)
+
+    task.data["response"] = {"type": "json"}
+    _, without_fields, _ = engine.prepare(source, create_snapshot=False)
+    assert with_fields[0].input_hash == without_fields[0].input_hash
+    assert with_fields[0].compatible_input_hashes
+
+
+def test_known_legacy_export_hash_migrates_without_rerun(tmp_path, monkeypatch):
+    from openpyxl import Workbook
+
+    source = tmp_path / "source.xlsx"
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet.append(["text"])
+    sheet.append(["hello"])
+    workbook.save(source)
+    workbook.close()
+
+    task_root = tmp_path / "task"
+    task_root.mkdir()
+    task = TaskDefinition(
+        "json_export",
+        "1.0.0",
+        task_root,
+        {
+            "input": {"type": "excel"},
+            "gateway": {"model": "model", "max_tokens": 100, "temperature": 0.1},
+            "response": {"type": "json", "fields": ["answer"]},
+        },
+        "{{ text }}",
+    )
+    engine = TextBatchEngine(ROOT, ROOT / "subtasks" / "text_to_text", task, "batch")
+    _, records, _ = engine.prepare(source, create_snapshot=False)
+    record = records[0]
+    assert record.compatible_input_hashes
+
+    store = StateStore(engine.paths.state)
+    try:
+        store.save(CallResult(
+            record.record_key,
+            record.source_row,
+            record.compatible_input_hashes[0],
+            "success",
+            raw_text='{"answer":"ok"}',
+            parsed={"answer": "ok"},
+            updated_at="old",
+        ))
+    finally:
+        store.close()
+
+    monkeypatch.setattr("ai_gateway.text_to_text.engine.export_results", lambda *_args, **_kwargs: None)
+    summary = engine.run(source)
+    assert summary["selected"] == 0
+    store = StateStore(engine.paths.state)
+    try:
+        saved = store.get(record.record_key)
+        assert saved["status"] == "success"
+        assert saved["input_hash"] == record.input_hash
+        assert saved["parsed"] == {"answer": "ok"}
+    finally:
+        store.close()
+
+
 def test_fixed_fields_parser():
     parsed = parse_response("SKU: A1\n产品识别: 台灯\n提取关键词: 灯具", {
         "type": "fixed_fields", "fields": ["SKU", "产品识别", "提取关键词"]

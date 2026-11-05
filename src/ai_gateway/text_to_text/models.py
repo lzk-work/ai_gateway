@@ -14,6 +14,7 @@ class InputRecord:
     input_hash: str
     action: str = "auto"
     image_urls: list[str] = field(default_factory=list)
+    compatible_input_hashes: list[str] = field(default_factory=list)
 
 
 @dataclass(slots=True)

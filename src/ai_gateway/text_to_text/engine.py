@@ -93,10 +93,18 @@ class TextBatchEngine:
                 raise ValueError(
                     "图片链接列没有对应表头: " + ", ".join(missing_image_headers)
                 )
+        response_contract = dict(self.task.response)
+        legacy_response_contract: dict[str, Any] | None = None
+        # For JSON tasks, `fields` only controls which parsed values are
+        # exported to Excel. It does not change the prompt or API request and
+        # therefore must not invalidate successful API results.
+        if response_contract.get("type") == "json" and "fields" in response_contract:
+            legacy_response_contract = dict(response_contract)
+            response_contract.pop("fields", None)
         request_contract = {
             "task": self.task.name, "task_version": self.task.version,
             "model": self.task.gateway.get("model"), "max_tokens": self.task.gateway.get("max_tokens", 1200),
-            "temperature": self.task.gateway.get("temperature", 0.1), "response": self.task.response,
+            "temperature": self.task.gateway.get("temperature", 0.1), "response": response_contract,
         }
         records: list[InputRecord] = []
         keys: set[str] = set()
@@ -125,6 +133,12 @@ class TextBatchEngine:
                 prompt = prompt
             image_urls = self._image_urls(fields, image_url_columns)
             row_contract = request_contract
+            legacy_row_contract: dict[str, Any] | None = None
+            if legacy_response_contract is not None:
+                legacy_row_contract = {
+                    **request_contract,
+                    "response": legacy_response_contract,
+                }
             if image_url_columns:
                 row_contract = {
                     **request_contract,
@@ -133,6 +147,17 @@ class TextBatchEngine:
                         "detail": str(self.task.gateway.get("image_detail", "auto")),
                     },
                 }
+                if legacy_row_contract is not None:
+                    legacy_row_contract = {
+                        **legacy_row_contract,
+                        "images": {
+                            "urls": image_urls,
+                            "detail": str(self.task.gateway.get("image_detail", "auto")),
+                        },
+                    }
+            compatible_hashes = []
+            if legacy_row_contract is not None:
+                compatible_hashes.append(request_hash(prompt, legacy_row_contract))
             records.append(
                 InputRecord(
                     record_key,
@@ -142,6 +167,7 @@ class TextBatchEngine:
                     request_hash(prompt, row_contract),
                     action,
                     image_urls,
+                    compatible_hashes,
                 )
             )
             records[-1].fields["__missing_required__"] = missing
@@ -191,6 +217,15 @@ class TextBatchEngine:
             pending: list[InputRecord] = []
             for record in records:
                 old = store.get(record.record_key)
+                if (
+                    old
+                    and old["input_hash"] != record.input_hash
+                    and old["input_hash"] in record.compatible_input_hashes
+                    and store.migrate_input_hash(
+                        record.record_key, old["input_hash"], record.input_hash
+                    )
+                ):
+                    old = store.get(record.record_key)
                 if record.action == "skip":
                     if not old or old["input_hash"] != record.input_hash:
                         store.stage(record, "skipped")
