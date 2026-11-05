@@ -6,7 +6,7 @@
   },
   "input": {
     "type": "excel",
-    "default_path": "input/gx-未出单-未交付.xlsx",
+    "default_path": "input/26-11-禁售合规_1.xlsx",
     "sheet_name": null,
     "header_row": 1,
     "required_placeholders": ["SKU", "标题", "描述", "五点"],
@@ -18,19 +18,29 @@
   },
   "gateway": {
     "name": "tuzi_text",
-    "model": "gpt-5.6-luna",
-    "max_tokens": 1500,
+    "model": "gpt-6-luna",
+    "max_tokens": 2000,
     "temperature": 0.1,
     "image_detail": "high"
   },
   "execution": {
-    "concurrency": 5,
+    "concurrency": 10,
     "request_start_interval_seconds": 1.0,
     "retry_delay_seconds": 3,
     "validation_retry_count": 1
   },
   "response": {
     "type": "json",
+    "fields": [
+      "SKU",
+      "产品识别",
+      "是否存在风险",
+      "总体风险等级",
+      "核心风险类别",
+      "涵盖风险",
+      "产品本身风险",
+      "文案风险"
+    ],
     "validator": "validator.py"
   }
 }

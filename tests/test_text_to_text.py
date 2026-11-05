@@ -7,6 +7,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
 from ai_gateway.text_to_text.engine import TextBatchEngine
+from ai_gateway.text_to_text.excel_io import export_results
 from ai_gateway.text_to_text.config import TaskDefinition, load_task
 from ai_gateway.text_to_text.models import CallResult
 from ai_gateway.text_to_text.response import parse_response
@@ -281,6 +282,61 @@ def test_batch_output_is_nested_under_its_task():
     task = load_task(task_root / "tasks", "keyword_1688")
     engine = TextBatchEngine(ROOT, task_root, task, "batch_001")
     assert engine.paths.root == task.root / "batches" / "batch_001"
+
+
+def test_prohibited_review_declares_split_output_columns():
+    task_root = ROOT / "subtasks" / "text_to_text"
+    task = load_task(task_root / "tasks", "prohibited_compliance_review")
+    assert task.response["fields"] == [
+        "SKU",
+        "产品识别",
+        "是否存在风险",
+        "总体风险等级",
+        "核心风险类别",
+        "涵盖风险",
+        "产品本身风险",
+        "文案风险",
+    ]
+
+
+def test_export_results_writes_parsed_fields_to_separate_columns(tmp_path):
+    from openpyxl import Workbook, load_workbook
+
+    source = tmp_path / "source.xlsx"
+    destination = tmp_path / "result.xlsx"
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet.title = "Sheet1"
+    sheet.append(["SKU", "标题"])
+    sheet.append(["A001", "Example"])
+    workbook.save(source)
+    workbook.close()
+
+    fields = ["SKU", "产品识别", "是否存在风险", "总体风险等级"]
+    records = [{
+        "record_key": "row:2",
+        "source_row": 2,
+        "input_hash": "hash",
+        "status": "success",
+        "raw_text": '{"SKU":"A001"}',
+        "parsed": {
+            "SKU": "A001",
+            "产品识别": "示例产品",
+            "是否存在风险": "否",
+            "总体风险等级": "PASS",
+        },
+    }]
+    export_results(source, destination, "Sheet1", records, fields)
+
+    result = load_workbook(destination, read_only=True, data_only=True)
+    try:
+        output = result["Sheet1"]
+        headers = [cell.value for cell in output[1]]
+        assert output.cell(2, headers.index("产品识别") + 1).value == "示例产品"
+        assert output.cell(2, headers.index("是否存在风险") + 1).value == "否"
+        assert output.cell(2, headers.index("总体风险等级") + 1).value == "PASS"
+    finally:
+        result.close()
 
 
 def test_task_loader_preserves_prompt_whitespace_exactly(tmp_path):
