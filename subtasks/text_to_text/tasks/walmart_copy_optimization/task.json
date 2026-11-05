@@ -6,8 +6,8 @@
   },
   "input": {
     "type": "excel",
-    "default_path": "input/source.xlsx",
-    "sheet_name": "五点入参",
+    "default_path": "input/文案优化入参_1.xlsx",
+    "sheet_name": "Sheet1",
     "header_row": 1,
     "required_placeholders": ["标题", "描述", "五点"]
   },
@@ -25,7 +25,7 @@
     "request_start_interval_seconds": 1.0,
     "retry_delay_seconds": 3,
     "validation_retry_count": 1,
-    "max_rounds": 3,
+    "max_rounds": 10,
     "round_retry_delay_seconds": 300,
     "auto_retry_statuses": [
       "api_transient_failed",
