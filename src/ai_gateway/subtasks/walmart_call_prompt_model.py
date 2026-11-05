@@ -178,13 +178,13 @@ class RuntimeModelPool:
                 self.current = self.available[0]
 
     def handle_model_unavailable(self, failed_model: str) -> str | None:
+        if not self.enabled:
+            return None
         with self.lock:
             if failed_model in self.available and len(self.available) > 1:
                 self.available = [item for item in self.available if item != failed_model]
                 self.current = self.available[0]
                 return self.current
-        if not self.enabled:
-            return None
         refreshed = fetch_gateway_models(self.gateway_config)
         with self.lock:
             filtered = [item for item in self.allowed if item in refreshed and item != failed_model]
@@ -839,6 +839,13 @@ def call_one(
                 next_model = model_pool.handle_model_unavailable(model_name)
                 if next_model and attempt < max_attempts:
                     safe_print(f"模型切换: {model_name} -> {next_model} | 原因=模型通道不可用")
+                    continue
+                if attempt < max_attempts:
+                    safe_print(
+                        f"模型通道暂不可用，同模型重试: {model_name} | "
+                        f"第 {attempt + 1}/{max_attempts} 次"
+                    )
+                    time.sleep(config.retry_delay_seconds)
                     continue
             if attempt >= max_attempts or not is_retryable_error_message(str(exc)):
                 break

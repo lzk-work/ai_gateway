@@ -79,6 +79,44 @@ class ConfigurationTests(unittest.TestCase):
             self.assertEqual(call.call_count, retries + 1)
             self.assertEqual(result.status, "failed")
 
+    def test_model_channel_unavailable_retries_same_model_when_switch_disabled(self):
+        from ai_gateway.config.loader import GatewayConfig
+        from ai_gateway.clients.openai_chat_client import OpenAIChatClient
+
+        config = workflow.load_stage_config(workflow.CALL_MODEL_CONFIG, buzz.load_config)
+        config.retry_delay_seconds = 0
+        gateway = GatewayConfig(
+            "tuzi_text", "tuzi", "https://example.test", max_retries=2
+        )
+        client = OpenAIChatClient(gateway)
+        pool = buzz.RuntimeModelPool(
+            gateway,
+            "gpt-6-luna",
+            ["gpt-5.6-luna"],
+            enabled=False,
+        )
+        source_task = {
+            "task_id": "test",
+            "next_task_payload": {"prompt": "test"},
+        }
+
+        with patch.object(
+            buzz,
+            "_call_model",
+            side_effect=RuntimeError("model_not_found: No available channel for model"),
+        ) as call, contextlib.redirect_stdout(io.StringIO()):
+            result = buzz.call_one(
+                1, 1, source_task, config, client, "tuzi_text", pool
+            )
+
+        self.assertEqual(call.call_count, 3)
+        self.assertEqual(
+            [item.args[1]["model"] for item in call.call_args_list],
+            ["gpt-6-luna", "gpt-6-luna", "gpt-6-luna"],
+        )
+        self.assertEqual(pool.current_model(), "gpt-6-luna")
+        self.assertEqual(result.status, "failed")
+
     def test_optional_temperature_is_omitted(self):
         payload = buzz.build_chat_payload(
             next_payload={"prompt": "test", "images": []},
