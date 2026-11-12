@@ -26,7 +26,13 @@
     "concurrency": 10,
     "request_start_interval_seconds": 1.0,
     "retry_delay_seconds": 3,
-    "validation_retry_count": 1
+    "validation_retry_count": 1,
+    "max_rounds": 3,
+    "round_retry_delay_seconds": 60,
+    "auto_retry_statuses": [
+      "api_transient_failed",
+      "validation_failed"
+    ]
   },
   "response": {
     "type": "fixed_fields",

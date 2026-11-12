@@ -6,7 +6,7 @@
   },
   "input": {
     "type": "excel",
-    "default_path": "input/文案优化入参_1.xlsx",
+    "default_path": "input/文案优化入参_5.xlsx",
     "sheet_name": "Sheet1",
     "header_row": 1,
     "required_placeholders": ["标题", "描述", "五点"]

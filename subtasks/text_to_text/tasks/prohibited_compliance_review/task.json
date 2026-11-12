@@ -6,7 +6,7 @@
   },
   "input": {
     "type": "excel",
-    "default_path": "input/26-11-禁售合规_1.xlsx",
+    "default_path": "input/26-11_禁售合规_5.xlsx",
     "sheet_name": null,
     "header_row": 1,
     "required_placeholders": ["SKU", "标题", "描述", "五点"],
@@ -27,7 +27,13 @@
     "concurrency": 10,
     "request_start_interval_seconds": 1.0,
     "retry_delay_seconds": 3,
-    "validation_retry_count": 1
+    "validation_retry_count": 1,
+    "max_rounds": 3,
+    "round_retry_delay_seconds": 60,
+    "auto_retry_statuses": [
+      "api_transient_failed",
+      "validation_failed"
+    ]
   },
   "response": {
     "type": "json",

@@ -386,6 +386,19 @@ def test_prohibited_review_declares_split_output_columns():
     ]
 
 
+def test_all_text_tasks_declare_automatic_round_retry_policy():
+    tasks_root = ROOT / "subtasks" / "text_to_text" / "tasks"
+    for task_path in sorted(tasks_root.glob("*/task.json")):
+        task = load_task(tasks_root, task_path.parent.name)
+        execution = task.execution
+        assert int(execution["max_rounds"]) >= 1, task.name
+        assert float(execution["round_retry_delay_seconds"]) >= 0, task.name
+        assert execution["auto_retry_statuses"] == [
+            "api_transient_failed",
+            "validation_failed",
+        ], task.name
+
+
 def test_export_results_writes_parsed_fields_to_separate_columns(tmp_path):
     from openpyxl import Workbook, load_workbook
 
