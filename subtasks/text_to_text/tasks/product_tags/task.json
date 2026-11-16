@@ -1,0 +1,62 @@
+{
+  "task": {
+    "name": "product_tags",
+    "version": "1.0.0",
+    "description": "根据商品文案生成标准化商品标签"
+  },
+  "input": {
+    "type": "excel",
+    "default_path": "input/产品标签261116-1.xlsx",
+    "sheet_name": "Sheet1",
+    "header_row": 1,
+    "required_placeholders": ["SKU", "标题", "描述", "五点"]
+  },
+  "prompt": {
+    "template": "prompt.txt"
+  },
+  "gateway": {
+    "name": "tuzi_text",
+    "model": "gpt-6-luna",
+    "max_tokens": 2500,
+    "temperature": 0.1
+  },
+  "execution": {
+    "concurrency": 10,
+    "request_start_interval_seconds": 1.0,
+    "retry_delay_seconds": 3,
+    "validation_retry_count": 1,
+    "max_rounds": 3,
+    "round_retry_delay_seconds": 60,
+    "auto_retry_statuses": [
+      "api_transient_failed",
+      "validation_failed"
+    ]
+  },
+  "response": {
+    "type": "json",
+    "fields": [
+      "Product SKU",
+      "一级类目",
+      "二级类目",
+      "三级类目",
+      "季节属性",
+      "节日属性",
+      "适用人群",
+      "使用场景",
+      "功能属性",
+      "生命周期",
+      "TikTok潜力",
+      "节日爆款潜力",
+      "Walmart同款",
+      "Amazon同款",
+      "Walmart竞争度",
+      "Amazon竞争度",
+      "Ozon竞争度",
+      "市场饱和度",
+      "广告价值等级",
+      "爆款指数",
+      "推荐运营方式"
+    ],
+    "validator": "validator.py"
+  }
+}

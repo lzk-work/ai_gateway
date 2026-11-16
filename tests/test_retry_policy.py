@@ -16,6 +16,14 @@ def test_intermediary_model_pool_404_is_retryable():
     assert is_retryable_error("RuntimeError", message)
 
 
+def test_intermediary_model_pool_400_is_retryable():
+    message = (
+        'HTTP 400: {"error":{"message":"Model \"gpt-6-luna\" is not supported '
+        'by any configured account in this group","type":"invalid_request_error"}}'
+    )
+    assert is_retryable_error("RuntimeError", message)
+
+
 def test_intermediary_capacity_errors_are_retryable():
     messages = (
         'HTTP 402: {"code":"service_capacity_unavailable"}',

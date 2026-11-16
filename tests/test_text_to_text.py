@@ -399,6 +399,31 @@ def test_all_text_tasks_declare_automatic_round_retry_policy():
         ], task.name
 
 
+def test_read_excel_ignores_phantom_formatted_rows(tmp_path):
+    import zipfile
+    from openpyxl import Workbook
+    from ai_gateway.text_to_text.excel_io import read_excel
+
+    path = tmp_path / "phantom_rows.xlsx"
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet.append(["SKU", "标题"])
+    sheet.append(["A001", "Example"])
+    sheet.cell(1_000_000, 1).number_format = "@"
+    workbook.save(path)
+    workbook.close()
+
+    # Confirm the source workbook really declares the large formatted range.
+    with zipfile.ZipFile(path) as archive:
+        xml = archive.read("xl/worksheets/sheet1.xml")
+        assert b"A1000000" in xml
+
+    sheet_name, headers, rows = read_excel(path, None, 1)
+    assert sheet_name == "Sheet"
+    assert headers == ["SKU", "标题"]
+    assert rows == [(2, {"SKU": "A001", "标题": "Example"})]
+
+
 def test_export_results_writes_parsed_fields_to_separate_columns(tmp_path):
     from openpyxl import Workbook, load_workbook
 

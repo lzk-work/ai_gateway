@@ -11,9 +11,21 @@ from .template import normalize_name, stringify
 def read_excel(path: Path, sheet_name: str | None, header_row: int = 1) -> tuple[str, list[str], list[tuple[int, dict[str, Any]]]]:
     from openpyxl import load_workbook
 
-    workbook = load_workbook(path, read_only=True, data_only=True)
+    workbook = load_workbook(
+        path,
+        read_only=True,
+        data_only=True,
+        keep_links=False,
+    )
     try:
         sheet = workbook[sheet_name] if sheet_name else workbook.active
+        # Some exported workbooks declare a used range of more than one million
+        # rows even though only a handful of rows contain cells. In read-only
+        # mode openpyxl trusts that stale dimension and iter_rows() scans every
+        # phantom row. Recalculate the dimension from actual worksheet XML.
+        if hasattr(sheet, "reset_dimensions"):
+            sheet.reset_dimensions()
+            sheet.calculate_dimension(force=True)
         header_cells = next(sheet.iter_rows(min_row=header_row, max_row=header_row))
         headers = [stringify(cell.value) for cell in header_cells]
         seen: set[str] = set()
