@@ -6,9 +6,10 @@
       "name": "tuzi_text"
     },
     "model": {
-      "name": "gpt-6-luna",
+      "name": "gpt-6.1-terra",
+      "api_mode": "responses",
       "candidates": [
-        "gpt-5.6-luna"
+        "gpt-6-luna"
       ],
       "refresh_on_error": false,
       "stream": false,
@@ -21,7 +22,7 @@
     "retry_delay_seconds": 30
   },
   "limits": {
-    "request_start_interval_seconds": 1
+    "request_start_interval_seconds": 2
   },
   "resume": {
     "skip_success": true

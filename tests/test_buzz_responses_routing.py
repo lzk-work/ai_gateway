@@ -1,6 +1,7 @@
 import unittest
 import json
 import sys
+import tempfile
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
@@ -11,9 +12,10 @@ sys.path.insert(0, str(ROOT / "src"))
 from ai_gateway.clients.openai_chat_client import (
     OpenAIChatClient,
     ReferenceImageNotFoundError,
+    _decode_json_response,
     _raise_for_status,
 )
-from ai_gateway.subtasks.walmart_call_prompt_model import _call_model
+from ai_gateway.subtasks.walmart_call_prompt_model import _call_model, read_jsonl
 
 
 class FakeResponse:
@@ -34,6 +36,44 @@ class FakeResponse:
 
 
 class BuzzResponsesRoutingTests(unittest.TestCase):
+    def test_jsonl_reader_ignores_nul_only_interrupted_tail(self):
+        with tempfile.TemporaryDirectory(dir=ROOT) as temp_dir:
+            path = Path(temp_dir) / "results.jsonl"
+            path.write_bytes(b'{"status":"success"}\n' + b"\x00" * 64)
+
+            self.assertEqual(read_jsonl(path), [{"status": "success"}])
+
+    def test_jsonl_reader_reports_file_and_line_for_real_corruption(self):
+        with tempfile.TemporaryDirectory(dir=ROOT) as temp_dir:
+            path = Path(temp_dir) / "results.jsonl"
+            path.write_text('{"status":"success"}\nnot-json\n', encoding="utf-8")
+
+            with self.assertRaisesRegex(RuntimeError, r"results\.jsonl.*第 2 行"):
+                read_jsonl(path)
+
+    def test_successful_empty_body_reports_provider_and_endpoint(self):
+        response = Mock(status_code=200, text="", headers={"Content-Type": "application/json"})
+
+        with self.assertRaisesRegex(
+            RuntimeError,
+            r"BUZZ /v1/chat/completions returned an empty response body",
+        ):
+            _decode_json_response(response, "buzz", "/v1/chat/completions")
+
+    def test_successful_html_body_reports_non_json_instead_of_jsondecodeerror(self):
+        response = Mock(
+            status_code=200,
+            text="<html><title>gateway timeout</title></html>",
+            headers={"Content-Type": "text/html"},
+        )
+        response.json.side_effect = ValueError("not json")
+
+        with self.assertRaisesRegex(
+            RuntimeError,
+            r"BUZZ /v1/chat/completions returned non-JSON content",
+        ):
+            _decode_json_response(response, "buzz", "/v1/chat/completions")
+
     def test_wrapped_http_500_image_404_is_permanent_reference_error(self):
         response = SimpleNamespace(
             status_code=500,
@@ -43,13 +83,13 @@ class BuzzResponsesRoutingTests(unittest.TestCase):
         with self.assertRaisesRegex(ReferenceImageNotFoundError, "参考图片失效"):
             _raise_for_status(response)
 
-    def test_non_streaming_gpt_model_uses_responses_directly(self):
+    def test_explicit_responses_mode_uses_responses_directly(self):
         client = Mock()
         client.responses_completions.return_value = (
             {"output": [{"type": "message", "content": [{"type": "output_text", "text": "result"}]}]},
             123,
         )
-        config = SimpleNamespace(stream=False)
+        config = SimpleNamespace(stream=False, api_mode="responses")
 
         response, latency_ms, text = _call_model(
             client,
@@ -63,10 +103,10 @@ class BuzzResponsesRoutingTests(unittest.TestCase):
         self.assertEqual(text, "result")
         self.assertIn("output", response)
 
-    def test_streaming_gpt_model_uses_responses_streaming_directly(self):
+    def test_streaming_explicit_responses_mode_uses_responses_streaming_directly(self):
         client = Mock()
         client.responses_streaming.return_value = ({"id": "resp_1"}, 456, "streamed")
-        config = SimpleNamespace(stream=True)
+        config = SimpleNamespace(stream=True, api_mode="responses")
 
         response, latency_ms, text = _call_model(
             client,
@@ -78,6 +118,38 @@ class BuzzResponsesRoutingTests(unittest.TestCase):
         client.responses_completions.assert_not_called()
         client.chat_completions.assert_not_called()
         self.assertEqual((response["id"], latency_ms, text), ("resp_1", 456, "streamed"))
+
+    def test_explicit_chat_completions_mode_keeps_gpt_on_chat_endpoint(self):
+        client = Mock()
+        client.chat_completions.return_value = (
+            {"choices": [{"message": {"content": "result"}}]},
+            321,
+        )
+        config = SimpleNamespace(stream=False, api_mode="chat_completions")
+
+        response, latency_ms, text = _call_model(
+            client,
+            {"model": "gpt-6-luna", "messages": []},
+            config,
+        )
+
+        client.chat_completions.assert_called_once()
+        client.responses_completions.assert_not_called()
+        self.assertEqual(latency_ms, 321)
+        self.assertEqual(text, "result")
+        self.assertIn("choices", response)
+
+    def test_explicit_chat_mode_does_not_fallback_to_responses(self):
+        client = Mock()
+        client.chat_completions.side_effect = RuntimeError(
+            "The /v1/chat/completions endpoint only supports Gemini upstreams; use /v1/responses"
+        )
+        config = SimpleNamespace(stream=False, api_mode="chat_completions")
+
+        with self.assertRaisesRegex(RuntimeError, "use /v1/responses"):
+            _call_model(client, {"model": "gpt-6-luna", "messages": []}, config)
+
+        client.responses_completions.assert_not_called()
 
     def test_responses_sse_parser_collects_text_and_requires_completion(self):
         gateway = SimpleNamespace(

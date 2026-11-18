@@ -81,13 +81,19 @@ def print_execution_confirmation(dry_run: bool = False) -> bool:
     gateway_config = app_config.gateways.get(gateway_name)
     print(f"网关: {gateway_name}")
     if gateway_config:
-        default_endpoint = "/v1/responses" if str(model.get("name", "")).startswith("gpt-") else "/v1/chat/completions"
+        api_mode = str(model.get("api_mode", "auto") or "auto")
+        if api_mode == "responses":
+            default_endpoint = "/v1/responses"
+        elif api_mode == "chat_completions":
+            default_endpoint = "/v1/chat/completions"
+        else:
+            default_endpoint = "/v1/responses" if str(model.get("name", "")).startswith("gpt-") else "/v1/chat/completions"
         print(f"API: {gateway_config.base_url}{gateway.get('endpoint', default_endpoint)}")
         print(f"Key环境变量: {gateway_config.api_key_env}")
         print(f"HTTP超时: {gateway_config.timeout_seconds}s | 失败重试: {gateway_max_attempts(gateway_config) - 1} 次（含首次最多 {gateway_max_attempts(gateway_config)} 次）")
     print(f"模型: {model.get('name')}")
     print(f"候选模型: {', '.join(model.get('candidates', [])) or '无'}")
-    print(f"stream: {model.get('stream')} | max_tokens: {model.get('max_tokens')} | temperature: {model.get('temperature')}")
+    print(f"api_mode: {model.get('api_mode', 'auto')} | stream: {model.get('stream')} | max_tokens: {model.get('max_tokens')} | temperature: {model.get('temperature')}")
     print(f"并发: {execution.get('concurrency', 1)} | 启动模型预检: {execution.get('preflight_model', True)}")
     print(f"结果日志: {paths['model_results']}")
     print(f"完整输出: {paths['full_outputs']}")

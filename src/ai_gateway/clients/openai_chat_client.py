@@ -42,7 +42,7 @@ class OpenAIChatClient:
         latency_ms = int((time.perf_counter() - started) * 1000)
         response.encoding = "utf-8"
         _raise_for_status(response)
-        return response.json(), latency_ms
+        return _decode_json_response(response, self.gateway.name, "/v1/chat/completions"), latency_ms
 
     def responses_completions(
         self, payload: dict[str, Any]
@@ -64,7 +64,7 @@ class OpenAIChatClient:
         latency_ms = int((time.perf_counter() - started) * 1000)
         response.encoding = "utf-8"
         _raise_for_status(response)
-        return response.json(), latency_ms
+        return _decode_json_response(response, self.gateway.name, "/v1/responses"), latency_ms
 
     def responses_streaming(
         self, payload: dict[str, Any]
@@ -189,6 +189,34 @@ def _raise_for_status(response: "requests.Response") -> None:
         if is_unsupported_upstream_error(body):
             raise UnsupportedUpstreamError(f"HTTP {response.status_code}: {body}")
         raise RuntimeError(f"HTTP {response.status_code}: {body}")
+
+
+def _decode_json_response(
+    response: "requests.Response",
+    provider_name: str,
+    endpoint: str,
+) -> dict[str, Any]:
+    """Decode a successful JSON response with an actionable provider error."""
+    body = response.text or ""
+    if not body.strip():
+        raise RuntimeError(
+            f"{provider_name.upper()} {endpoint} returned an empty response body "
+            f"(HTTP {response.status_code})"
+        )
+    try:
+        payload = response.json()
+    except (ValueError, json.JSONDecodeError) as exc:
+        content_type = response.headers.get("Content-Type", "unknown")
+        preview = " ".join(body[:300].split())
+        raise RuntimeError(
+            f"{provider_name.upper()} {endpoint} returned non-JSON content "
+            f"(HTTP {response.status_code}, Content-Type={content_type}): {preview}"
+        ) from exc
+    if not isinstance(payload, dict):
+        raise RuntimeError(
+            f"{provider_name.upper()} {endpoint} returned JSON that is not an object"
+        )
+    return payload
 
 
 def build_responses_payload(chat_payload: dict[str, Any]) -> dict[str, Any]:

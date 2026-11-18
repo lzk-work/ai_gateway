@@ -64,6 +64,7 @@ class WalmartCallPromptModelConfig:
     gateway: str | None = None
     model: str | None = None
     model_candidates: list[str] = field(default_factory=list)
+    api_mode: str = "auto"
     max_records: int | None = None
     concurrency: int = 1
     max_tokens: int | None = 2500
@@ -132,6 +133,7 @@ def load_config(path: str | Path, *, config_data: dict[str, Any] | None = None) 
             "gateway": gateway.get("name"),
             "model": model.get("name"),
             "model_candidates": model.get("candidates", []),
+            "api_mode": model.get("api_mode", "auto"),
             "max_records": None,
             "max_tokens": model.get("max_tokens", 2500),
             "temperature": model.get("temperature", 0.2),
@@ -708,13 +710,24 @@ def _call_model(
     payload: dict[str, Any],
     config: WalmartCallPromptModelConfig,
 ) -> tuple[dict[str, Any], int, str]:
-    """Send one model request.
+    """Send one model request using the explicitly configured wire protocol.
 
-    GPT/OpenAI/Codex models use /v1/responses directly in non-streaming mode.
-    Other models use /v1/chat/completions and retain the compatibility fallback.
+    ``auto`` preserves the legacy model-name routing for existing tasks. New
+    gateway integrations should set ``api_mode`` to ``chat_completions`` or
+    ``responses`` so a provider protocol change does not depend on a model-name
+    heuristic.
     """
     model_name = str(payload.get("model") or "").lower()
-    if model_name.startswith("gpt-"):
+    api_mode = str(getattr(config, "api_mode", "auto") or "auto").strip().lower()
+    if api_mode not in {"auto", "chat_completions", "responses"}:
+        raise ValueError(
+            f"unsupported api_mode={api_mode!r}; expected auto, chat_completions, or responses"
+        )
+
+    use_responses = api_mode == "responses" or (
+        api_mode == "auto" and model_name.startswith("gpt-")
+    )
+    if use_responses:
         responses_payload = build_responses_payload(payload)
         if config.stream:
             return client.responses_streaming(responses_payload)
@@ -729,7 +742,7 @@ def _call_model(
             result_text = extract_chat_text(response_payload)
         return response_payload, latency_ms, result_text
     except RuntimeError as exc:
-        if is_unsupported_upstream_error(str(exc)):
+        if api_mode == "auto" and is_unsupported_upstream_error(str(exc)):
             responses_payload = build_responses_payload(payload)
             if config.stream:
                 return client.responses_streaming(responses_payload)
@@ -1337,12 +1350,22 @@ def read_jsonl_if_exists(path: str | Path) -> list[dict[str, Any]]:
     return read_jsonl(path)
 
 def read_jsonl(path: str | Path) -> list[dict[str, Any]]:
+    source = Path(path)
     rows: list[dict[str, Any]] = []
-    with Path(path).open("r", encoding="utf-8") as handle:
-        for line in handle:
+    with source.open("r", encoding="utf-8") as handle:
+        for line_number, line in enumerate(handle, start=1):
             line = line.strip()
-            if line:
+            # A disk-full or interrupted append can leave a NUL-only tail.
+            # It contains no recoverable record and is safe to ignore. Any
+            # non-empty malformed content still fails loudly with its location.
+            if not line or not line.strip("\x00"):
+                continue
+            try:
                 rows.append(json.loads(line))
+            except json.JSONDecodeError as exc:
+                raise RuntimeError(
+                    f"JSONL 文件损坏: {source} 第 {line_number} 行无法解析: {exc}"
+                ) from exc
     return rows
 
 

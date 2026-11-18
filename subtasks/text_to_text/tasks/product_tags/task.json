@@ -21,11 +21,11 @@
     "temperature": 0.1
   },
   "execution": {
-    "concurrency": 10,
+    "concurrency": 5,
     "request_start_interval_seconds": 1.0,
     "retry_delay_seconds": 3,
     "validation_retry_count": 1,
-    "max_rounds": 3,
+    "max_rounds": 5,
     "round_retry_delay_seconds": 60,
     "auto_retry_statuses": [
       "api_transient_failed",
